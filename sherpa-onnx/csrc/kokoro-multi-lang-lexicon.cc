@@ -3,7 +3,6 @@
 // Copyright (c)  2025  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/kokoro-multi-lang-lexicon.h"
-#include "sherpa-onnx/csrc/macros.h"
 
 #include <fstream>
 #include <regex>
@@ -13,6 +12,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "sherpa-onnx/csrc/macros.h"
 
 #if __ANDROID_API__ >= 9
 #include "android/asset_manager.h"
@@ -71,6 +72,11 @@ class KokoroMultiLangLexicon::Impl {
     // how piper_phonemize handles punctuations inside the text
     std::string text = _text;
 
+    // Text normalization (step 3 of the frontend pipeline): map
+    // full-width/Chinese punctuation to ASCII and collapse whitespace runs,
+    // e.g. ，→, 、→, 。→. ？→? ！→!. The resulting punctuation characters are
+    // non-Chinese, so they will be routed to ConvertNonChineseToTokenIDs()
+    // below, never to the Chinese path.
     std::vector<std::pair<std::string, std::string>> replace_str_pairs = {
         {"，", ","}, {":", ","},  {"、", ","}, {"；", ";"},   {"：", ":"},
         {"。", "."}, {"？", "?"}, {"！", "!"}, {"\\s+", " "},
@@ -87,6 +93,15 @@ class KokoroMultiLangLexicon::Impl {
 
     // https://en.cppreference.com/w/cpp/regex
     // https://stackoverflow.com/questions/37989081/how-to-use-unicode-range-in-c-regex
+    // Run splitting: partition the normalized text into alternating Chinese
+    // runs ([一-龥]+) and non-Chinese runs ([^一-龥]+).
+    //
+    // The each split text chunk is processed independently. For example,
+    // text: 中國人民不信邪也不怕邪,不惹事!也不怕事...
+    // split text chunk list becomes: ["中國人民不信邪也不怕邪", ",", "不惹事",
+    // "!","也不怕事"] Chinese runs go to ConvertChineseToTokenIDs() (lexicon-zh
+    // lookup via PhraseMatcher); all other runs (punctuation, English, digits)
+    // go to ConvertNonChineseToTokenIDs().
     std::string expr_chinese = "([\\u4e00-\\u9fff]+)";
     std::string expr_not_chinese = "([^\\u4e00-\\u9fff]+)";
 
@@ -112,6 +127,9 @@ class KokoroMultiLangLexicon::Impl {
       uint8_t c = reinterpret_cast<const uint8_t *>(ms.data())[0];
 
       std::vector<std::vector<int32_t>> ids_vec;
+      // Route the run: Chinese runs go to ConvertChineseToTokenIDs()
+      // (lexicon-zh lookup via PhraseMatcher); all other runs (punctuation,
+      // English, digits) go to ConvertNonChineseToTokenIDs().
       if (std::regex_match(match_str, we_zh)) {
         if (debug_) {
           SHERPA_ONNX_LOGE("Chinese: %s", ms.c_str());
@@ -125,6 +143,18 @@ class KokoroMultiLangLexicon::Impl {
         ids_vec = ConvertNonChineseToTokenIDs(ms, voice);
       }
 
+      // ------------------------------------------------------------------
+      // Merge the per-chunk token IDs into sentence units. Every chunk
+      // returned above is already wrapped in BOS/EOS zeros:
+      //   - chunk with > 10+2 tokens      -> keep as its own sentence;
+      //   - ans empty                     -> push as-is;
+      //   - last sentence + chunk < 50    -> stitch into the last sentence
+      //     tokens, or chunk has < 5        (always true for punctuation
+      //     tokens                          chunks like "," -> {0, comma, 0});
+      //   - otherwise                     -> start a new sentence.
+      // Stitching replaces the last sentence's trailing EOS 0 with the
+      // chunk's first token (ids[1]) and appends ids[2..] (skipping the
+      // chunk's leading BOS 0), so boundaries are not duplicated.
       for (const auto &ids : ids_vec) {
         if (ids.size() > 10 + 2) {
           ans.emplace_back(ids);
@@ -211,6 +241,10 @@ class KokoroMultiLangLexicon::Impl {
 
   std::vector<std::vector<int32_t>> ConvertChineseToTokenIDs(
       const std::string &text) const {
+    // Split the run into one UTF-8 character per element, e.g.
+    // 中國人民不信邪 → [中, 國, 人, 民, 不, 信, 邪]. PhraseMatcher then groups
+    // adjacent characters into the longest lexicon phrases (max 10 chars),
+    // falling back to single characters for unmatched ones.
     std::vector<std::string> words = SplitUtf8(text);
 
     if (debug_) {
@@ -235,6 +269,12 @@ class KokoroMultiLangLexicon::Impl {
 
     this_sentence.push_back(0);
 
+    // Per-run bounded chunks: walk the whole Chinese run phrase by phrase.
+    // Whenever adding the next phrase would push the sentence past
+    // max_token_len (content budget is max_len - 2 after reserving BOS/EOS),
+    // flush the current sentence (append EOS 0, push to ans, start a new
+    // sentence with BOS 0). A long run therefore comes back as several
+    // sub-sentences, each bounded by max_token_len.
     PhraseMatcher matcher(&all_words_, words, debug_);
 
     for (const std::string &w : matcher) {
@@ -248,6 +288,8 @@ class KokoroMultiLangLexicon::Impl {
         continue;
       }
 
+      // The next phrase would exceed the max_token_len budget, so close
+      // this sub-sentence and start a new one.
       if (this_sentence.size() + ids.size() > max_len - 2) {
         this_sentence.push_back(0);
         ans.push_back(std::move(this_sentence));
@@ -300,6 +342,10 @@ class KokoroMultiLangLexicon::Impl {
       return {std::vector<int32_t>{0, token2id_.at(text), 0}};
     }
 
+    // Long non-Chinese runs are also split into bounded chunks, but inside
+    // the espeak-ng path: ConvertTextToTokenIDsWithEspeak() ends in
+    // PiperPhonemesToIdsKokoroOrKitten(), which chunks the phoneme sequence
+    // at max_token_len.
     if (!voice.empty()) {
       return ConvertTextToTokenIDsWithEspeak(text, voice);
     }
@@ -321,6 +367,11 @@ class KokoroMultiLangLexicon::Impl {
     }
 
     std::vector<std::vector<int32_t>> ans;
+    // Per-run bounded chunks for the voice-empty path: each word is appended
+    // to the current sentence; if it would exceed max_token_len (content
+    // budget max_len - 2), the sentence is flushed (EOS 0 pushed to ans, a
+    // new sentence starts with BOS 0). Punctuation ". ! ? ;" also ends a
+    // sentence.
     int32_t max_len = meta_data_.max_token_len;
     std::vector<int32_t> this_sentence;
 
