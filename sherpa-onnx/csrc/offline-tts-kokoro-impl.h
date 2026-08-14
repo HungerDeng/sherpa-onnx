@@ -240,8 +240,22 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
                                                : config_.model.kokoro.lang;
     }
 
-    std::vector<TokenIDs> token_ids = frontend_->ConvertTextToTokenIds(
-        text, lang);
+    std::vector<SplitSentence> split_sentences;
+    std::vector<TokenIDs> token_ids;
+    bool can_return_term_alignments = meta_data.version >= 2;
+    if (can_return_term_alignments) {
+      split_sentences =
+          frontend_->ConvertTextToSplitSentences(text, lang);
+      token_ids.reserve(split_sentences.size());
+      for (const auto &sentence : split_sentences) {
+        token_ids.push_back(sentence.token_ids);
+        if (sentence.terms.empty()) {
+          can_return_term_alignments = false;
+        }
+      }
+    } else {
+      token_ids = frontend_->ConvertTextToTokenIds(text, lang);
+    }
 
     if (token_ids.empty() ||
         (token_ids.size() == 1 && token_ids[0].tokens.empty())) {
@@ -301,6 +315,21 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
 
     GeneratedAudio ans;
 
+    if (can_return_term_alignments) {
+      ans.term_alignments.emplace();
+    }
+
+    auto append_term_alignments = [&](int32_t sentence_index) {
+      if (!ans.term_alignments ||
+          sentence_index >= static_cast<int32_t>(split_sentences.size())) {
+        return;
+      }
+      for (const auto &term : split_sentences[sentence_index].terms) {
+        ans.term_alignments->push_back(
+            {term.text, term.phoneme, -1.0f, -1.0f});
+      }
+    };
+
     int32_t should_continue = 1;
 
     int32_t k = 0;
@@ -316,6 +345,7 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
       ans.sample_rate = audio.sample_rate;
       ans.samples.insert(ans.samples.end(), audio.samples.begin(),
                          audio.samples.end());
+      append_term_alignments(k - 1);
       if (callback) {
         should_continue = callback(audio.samples.data(), audio.samples.size(),
                                    (b + 1) * 1.0 / num_batches);
@@ -333,11 +363,15 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
     }
 
     if (!batch_x.empty()) {
+      int32_t first_sentence = k - static_cast<int32_t>(batch_x.size());
       auto audio =
           Process(batch_x, sid, speed, gen_config.silence_scale);
       ans.sample_rate = audio.sample_rate;
       ans.samples.insert(ans.samples.end(), audio.samples.begin(),
                          audio.samples.end());
+      for (int32_t i = 0; i != static_cast<int32_t>(batch_x.size()); ++i) {
+        append_term_alignments(first_sentence + i);
+      }
       if (callback) {
         callback(audio.samples.data(), audio.samples.size(), 1.0);
         // Caution(fangjun): audio is freed when the callback returns, so users

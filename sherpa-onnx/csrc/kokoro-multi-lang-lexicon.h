@@ -33,6 +33,9 @@ class KokoroMultiLangLexicon : public OfflineTtsFrontend {
   std::vector<TokenIDs> ConvertTextToTokenIds(
       const std::string &text, const std::string &voice = "") const override;
 
+  std::vector<SplitSentence> ConvertTextToSplitSentences(
+      const std::string &text, const std::string &voice = "") const override;
+
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;

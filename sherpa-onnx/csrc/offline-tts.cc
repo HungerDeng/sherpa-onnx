@@ -90,6 +90,7 @@ GeneratedAudio GeneratedAudio::ScaleSilence(float scale) const {
 
   GeneratedAudio ans;
   ans.sample_rate = sample_rate;
+  ans.term_alignments = term_alignments;
   ans.samples.reserve(samples.size());
 
   i = 0;

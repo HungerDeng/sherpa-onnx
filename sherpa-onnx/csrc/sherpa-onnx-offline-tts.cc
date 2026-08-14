@@ -102,6 +102,7 @@ or details.
 
   sherpa_onnx::ParseOptions po(kUsageMessage);
   std::string output_filename = "./generated.wav";
+  bool print_term_alignments = false;
   int32_t sid = 0;
   int32_t emotion_id = -1;
 
@@ -125,6 +126,10 @@ or details.
 
   po.Register("output-filename", &output_filename,
               "Path to save the generated audio");
+
+  po.Register("print-term-alignments", &print_term_alignments,
+              "Print frontend term alignments when they are available. "
+              "Currently, only Kokoro v1.0+ provides them.");
 
   po.Register(
       "lang", &lang,
@@ -231,6 +236,23 @@ or details.
         stderr,
         "Error in generating audio. Please read previous error messages.\n");
     SHERPA_ONNX_EXIT(EXIT_FAILURE);
+  }
+
+  if (print_term_alignments) {
+    if (!audio.term_alignments) {
+      fprintf(stderr, "Term alignments are unavailable for this model.\n");
+    } else {
+      fprintf(stderr, "Number of term alignments: %zu\n",
+              audio.term_alignments->size());
+      for (size_t i = 0; i != audio.term_alignments->size(); ++i) {
+        const auto &alignment = (*audio.term_alignments)[i];
+        fprintf(stderr,
+                "Term alignment %zu: text='%s', phoneme='%s', start_ts=%.3f, "
+                "end_ts=%.3f\n",
+                i, alignment.text.c_str(), alignment.phoneme.c_str(),
+                alignment.start_ts, alignment.end_ts);
+      }
+    }
   }
 
   float elapsed_seconds =
