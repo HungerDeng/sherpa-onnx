@@ -363,10 +363,29 @@ class OfflineTts {
 
     final samples = Float32List.fromList(p.ref.samples.asTypedList(p.ref.n));
     final sampleRate = p.ref.sampleRate;
+    List<TermAlignment>? termAlignments;
+    if (p.ref.termAlignments != nullptr) {
+      termAlignments = List<TermAlignment>.generate(
+        p.ref.numTermAlignments,
+        (i) {
+          final a = p.ref.termAlignments[i];
+          return TermAlignment(
+            text: a.text.toDartString(),
+            phoneme: a.phoneme.toDartString(),
+            startTs: a.startTs,
+            endTs: a.endTs,
+          );
+        },
+      );
+    }
 
     SherpaOnnxBindings.destroyOfflineTtsGeneratedAudio?.call(p);
 
-    return GeneratedAudio(samples: samples, sampleRate: sampleRate);
+    return GeneratedAudio(
+      samples: samples,
+      sampleRate: sampleRate,
+      termAlignments: termAlignments,
+    );
   }
 
   /// Return the output sample rate reported by the model.

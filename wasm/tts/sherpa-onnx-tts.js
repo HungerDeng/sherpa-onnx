@@ -847,6 +847,25 @@ class OfflineTts {
     this.handle = 0
   }
 
+  _readTermAlignments(base) {
+    const alignmentsPtr = this.Module.HEAPU32[base + 3];
+    const count = this.Module.HEAP32[base + 4];
+    if (!alignmentsPtr || count <= 0) return null;
+
+    const ans = [];
+    for (let i = 0; i < count; ++i) {
+      const offset = alignmentsPtr + i * 16;
+      ans.push({
+        text: this.Module.UTF8ToString(this.Module.HEAPU32[offset / 4]),
+        phoneme:
+            this.Module.UTF8ToString(this.Module.HEAPU32[offset / 4 + 1]),
+        startTs: this.Module.HEAPF32[offset / 4 + 2],
+        endTs: this.Module.HEAPF32[offset / 4 + 3],
+      });
+    }
+    return ans;
+  }
+
   // {
   //   text: "hello",
   //   sid: 1,
@@ -886,6 +905,7 @@ class OfflineTts {
     const samplesPtr = this.Module.HEAPU32[base];
     const numSamples = this.Module.HEAP32[base + 1];
     const sampleRate = this.Module.HEAP32[base + 2];
+    const termAlignments = this._readTermAlignments(base);
 
     const heapSamples = this.Module.HEAPF32.subarray(
         samplesPtr / 4, samplesPtr / 4 + numSamples);
@@ -893,7 +913,7 @@ class OfflineTts {
     const samples = new Float32Array(heapSamples);
 
     this.Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(h);
-    return {samples: samples, sampleRate: sampleRate};
+    return {samples: samples, sampleRate: sampleRate, termAlignments};
   }
 
   generateWithConfig(text, genConfig) {
@@ -938,6 +958,7 @@ class OfflineTts {
     const samplesPtr = this.Module.HEAPU32[base];     // float* samples
     const numSamples = this.Module.HEAP32[base + 1];  // int32 num_samples
     const sampleRate = this.Module.HEAP32[base + 2];  // int32 sample_rate
+    const termAlignments = this._readTermAlignments(base);
 
     const heapSamples = this.Module.HEAPF32.subarray(
         samplesPtr / 4, samplesPtr / 4 + numSamples);
@@ -945,7 +966,7 @@ class OfflineTts {
 
     this.Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
 
-    return {samples, sampleRate};
+    return {samples, sampleRate, termAlignments};
   }
 
   save(filename, audio) {

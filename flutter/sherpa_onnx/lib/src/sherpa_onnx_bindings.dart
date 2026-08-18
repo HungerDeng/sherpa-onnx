@@ -324,6 +324,18 @@ final class SherpaOnnxGenerationConfig extends Struct {
   external Pointer<Utf8> extra;
 }
 
+final class SherpaOnnxTermAlignment extends Struct {
+  external Pointer<Utf8> text;
+
+  external Pointer<Utf8> phoneme;
+
+  @Float()
+  external double startTs;
+
+  @Float()
+  external double endTs;
+}
+
 final class SherpaOnnxGeneratedAudio extends Struct {
   external Pointer<Float> samples;
 
@@ -332,6 +344,11 @@ final class SherpaOnnxGeneratedAudio extends Struct {
 
   @Int32()
   external int sampleRate;
+
+  external Pointer<SherpaOnnxTermAlignment> termAlignments;
+
+  @Int32()
+  external int numTermAlignments;
 }
 
 final class SherpaOnnxFeatureConfig extends Struct {

@@ -1089,6 +1089,41 @@ type GeneratedAudio struct {
 	Samples []float32
 
 	SampleRate int
+
+	// Kokoro v1.0+ frontend terms. Nil for other models.
+	TermAlignments []TermAlignment
+}
+
+type TermAlignment struct {
+	Text    string
+	Phoneme string
+	StartTs float32
+	EndTs   float32
+}
+
+func copyGeneratedAudio(audio *C.struct_SherpaOnnxGeneratedAudio) *GeneratedAudio {
+	ans := &GeneratedAudio{SampleRate: int(audio.sample_rate)}
+	n := int(audio.n)
+	if n > 0 && audio.samples != nil {
+		ans.Samples = make([]float32, n)
+		copy(ans.Samples, unsafe.Slice((*float32)(unsafe.Pointer(audio.samples)), n))
+	}
+
+	count := int(audio.num_term_alignments)
+	if count > 0 && audio.term_alignments != nil {
+		items := unsafe.Slice(
+			(*C.struct_SherpaOnnxTermAlignment)(unsafe.Pointer(audio.term_alignments)),
+			count,
+		)
+		ans.TermAlignments = make([]TermAlignment, count)
+		for i, item := range items {
+			ans.TermAlignments[i] = TermAlignment{
+				Text: C.GoString(item.text), Phoneme: C.GoString(item.phoneme),
+				StartTs: float32(item.start_ts), EndTs: float32(item.end_ts),
+			}
+		}
+	}
+	return ans
 }
 
 type GenerationConfig struct {
@@ -1389,21 +1424,7 @@ func (tts *OfflineTts) Generate(text string, sid int, speed float32) *GeneratedA
 
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	ans := &GeneratedAudio{}
-	ans.SampleRate = int(audio.sample_rate)
-	n := int(audio.n)
-	ans.Samples = make([]float32, n)
-
-	// see https://stackoverflow.com/questions/48756732/what-does-1-30c-yourtype-do-exactly-in-cgo
-	// :n:n means 0:n:n, means low:high:capacity
-	samples := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
-
-	copy(ans.Samples, samples)
-
-	return ans
+	return copyGeneratedAudio(audio)
 }
 
 // Deprecated: Use GenerateWithConfig() instead.
@@ -1488,19 +1509,7 @@ func (tts *OfflineTts) GenerateWithProgressCallback(
 	}
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	n := int(audio.n)
-	samples := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
-
-	ans := &GeneratedAudio{
-		SampleRate: int(audio.sample_rate),
-		Samples:    make([]float32, n),
-	}
-	copy(ans.Samples, samples)
-
-	return ans
+	return copyGeneratedAudio(audio)
 }
 
 func (tts *OfflineTts) GenerateWithConfig(
@@ -1578,19 +1587,7 @@ func (tts *OfflineTts) GenerateWithConfig(
 	}
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	n := int(audio.n)
-	arr := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
-
-	ans := &GeneratedAudio{
-		SampleRate: int(audio.sample_rate),
-		Samples:    make([]float32, n),
-	}
-	copy(ans.Samples, arr)
-
-	return ans
+	return copyGeneratedAudio(audio)
 }
 
 func (audio *GeneratedAudio) Save(filename string) bool {

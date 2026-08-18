@@ -120,10 +120,21 @@ pub struct OfflineTtsConfig {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct SherpaOnnxTermAlignment {
+    pub text: *const c_char,
+    pub phoneme: *const c_char,
+    pub start_ts: c_float,
+    pub end_ts: c_float,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct SherpaOnnxGeneratedAudio {
     pub samples: *const f32,
     pub n: i32,
     pub sample_rate: i32,
+    pub term_alignments: *const SherpaOnnxTermAlignment,
+    pub num_term_alignments: i32,
 }
 
 #[repr(C)]
@@ -140,8 +151,9 @@ pub struct SherpaOnnxGenerationConfig {
     pub extra: *const c_char,
 }
 
-pub type SherpaOnnxGeneratedAudioProgressCallbackWithArg =
-    Option<unsafe extern "C" fn(samples: *const f32, n: i32, progress: c_float, arg: *mut c_void) -> i32>;
+pub type SherpaOnnxGeneratedAudioProgressCallbackWithArg = Option<
+    unsafe extern "C" fn(samples: *const f32, n: i32, progress: c_float, arg: *mut c_void) -> i32,
+>;
 
 #[repr(C)]
 pub struct SherpaOnnxOfflineTts {

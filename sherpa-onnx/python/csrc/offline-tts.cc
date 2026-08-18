@@ -13,11 +13,19 @@
 namespace sherpa_onnx {
 
 static void PybindGeneratedAudio(py::module *m) {
+  py::class_<TermAlignment>(*m, "TermAlignment")
+      .def(py::init<>())
+      .def_readwrite("text", &TermAlignment::text)
+      .def_readwrite("phoneme", &TermAlignment::phoneme)
+      .def_readwrite("start_ts", &TermAlignment::start_ts)
+      .def_readwrite("end_ts", &TermAlignment::end_ts);
+
   using PyClass = GeneratedAudio;
   py::class_<PyClass>(*m, "GeneratedAudio")
       .def(py::init<>())
       .def_readwrite("samples", &PyClass::samples)
       .def_readwrite("sample_rate", &PyClass::sample_rate)
+      .def_readwrite("term_alignments", &PyClass::term_alignments)
       .def("__str__", [](PyClass &self) {
         std::ostringstream os;
         os << "GeneratedAudio(sample_rate=" << self.sample_rate << ", ";

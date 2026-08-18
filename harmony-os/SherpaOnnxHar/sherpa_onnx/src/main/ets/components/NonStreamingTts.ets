@@ -107,6 +107,14 @@ export class OfflineTtsConfig {
 export class TtsOutput {
   public samples: Float32Array = new Float32Array(0);
   public sampleRate: number = 0;
+  public termAlignments?: Array<TermAlignment> | null;
+}
+
+export class TermAlignment {
+  public text: string = '';
+  public phoneme: string = '';
+  public startTs: number = -1;
+  public endTs: number = -1;
 }
 
 interface TtsCallbackData {

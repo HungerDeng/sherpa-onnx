@@ -2463,10 +2463,26 @@ typedef struct SherpaOnnxOfflineTtsConfig {
 /**
  * @brief Generated waveform returned by TTS APIs.
  *
- * The returned structure owns @c samples. Free the whole object with
+ * The returned structure owns @c samples and any term-alignment data. Free
+ * the whole object with
  * SherpaOnnxDestroyOfflineTtsGeneratedAudio().
+ *
+ * The original samples/n/sample_rate prefix is unchanged for existing
+ * consumers. Consumers compiled with the alignment fields require a matching
+ * or newer sherpa-onnx native library.
  * @see SherpaOnnxOfflineTtsGenerateWithConfig, SherpaOnnxDestroyOfflineTtsGeneratedAudio
  */
+typedef struct SherpaOnnxTermAlignment {
+  /** Frontend-normalized written word, phrase, or punctuation. */
+  const char *text;
+  /** Kokoro phoneme symbols assigned to this term. */
+  const char *phoneme;
+  /** Start time in seconds. Currently -1 because timing is unavailable. */
+  float start_ts;
+  /** End time in seconds. Currently -1 because timing is unavailable. */
+  float end_ts;
+} SherpaOnnxTermAlignment;
+
 typedef struct SherpaOnnxGeneratedAudio {
   /** Generated mono samples in the range [-1, 1]. */
   const float *samples;
@@ -2474,6 +2490,13 @@ typedef struct SherpaOnnxGeneratedAudio {
   int32_t n;
   /** Output sample rate. */
   int32_t sample_rate;
+  /**
+   * Kokoro v1.0+ term alignments, or NULL when unavailable. The array and its
+   * text/phoneme strings remain valid until this generated audio is destroyed.
+   */
+  const SherpaOnnxTermAlignment *term_alignments;
+  /** Number of entries in @c term_alignments. */
+  int32_t num_term_alignments;
 } SherpaOnnxGeneratedAudio;
 
 /**

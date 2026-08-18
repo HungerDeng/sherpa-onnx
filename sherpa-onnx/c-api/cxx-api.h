@@ -46,6 +46,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -1048,12 +1049,22 @@ struct OfflineTtsConfig {
   float silence_scale = 0.2;
 };
 
+/** @brief Frontend term metadata returned by Kokoro v1.0+. */
+struct TermAlignment {
+  std::string text;
+  std::string phoneme;
+  float start_ts = -1.0f;
+  float end_ts = -1.0f;
+};
+
 /** @brief Generated audio returned by the C++ TTS wrapper. */
 struct GeneratedAudio {
   /** Output samples normalized to `[-1, 1]`. */
   std::vector<float> samples;
   /** Output sample rate in Hz. */
   int32_t sample_rate = 0;
+  /** Kokoro v1.0+ frontend terms; unset for other models. */
+  std::optional<std::vector<TermAlignment>> term_alignments;
 };
 
 /**
