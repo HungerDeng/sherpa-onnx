@@ -27,6 +27,7 @@
 #include "espeak-ng/speak_lib.h"
 #include "phoneme_ids.hpp"  // NOLINT
 #include "phonemize.hpp"    // NOLINT
+#include "sherpa-onnx/csrc/espeak-phonemizer.h"
 #include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/text-utils.h"
@@ -62,10 +63,8 @@ static std::string ToString(char32_t cp) {
 void CallPhonemizeEspeak(const std::string &text,
                          piper::eSpeakPhonemeConfig &config,  // NOLINT
                          std::vector<std::vector<piper::Phoneme>> *phonemes) {
-  static std::mutex espeak_mutex;
-
-  // keep multi threads from calling into piper::phonemize_eSpeak
-  std::lock_guard<std::mutex> lock(espeak_mutex);
+  // Keep all flat and word-pair calls from entering espeak-ng concurrently.
+  std::lock_guard<std::mutex> lock(GetEspeakPhonemizerMutex());
 
   try {
     piper::phonemize_eSpeak(text, config, *phonemes);

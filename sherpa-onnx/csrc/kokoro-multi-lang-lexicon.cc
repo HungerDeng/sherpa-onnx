@@ -8,7 +8,6 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -31,6 +30,7 @@
 #include "espeak-ng/speak_lib.h"
 #include "phoneme_ids.hpp"  // NOLINT
 #include "phonemize.hpp"    // NOLINT
+#include "sherpa-onnx/csrc/espeak-phonemizer.h"
 #include "sherpa-onnx/csrc/file-utils.h"
 #include "sherpa-onnx/csrc/onnx-utils.h"
 #include "sherpa-onnx/csrc/phrase-matcher.h"
@@ -38,10 +38,6 @@
 #include "sherpa-onnx/csrc/text-utils.h"
 
 namespace sherpa_onnx {
-
-void CallPhonemizeEspeak(const std::string &text,
-                         piper::eSpeakPhonemeConfig &config,  // NOLINT
-                         std::vector<std::vector<piper::Phoneme>> *phonemes);
 
 class KokoroMultiLangLexicon::Impl {
  private:
@@ -53,6 +49,32 @@ class KokoroMultiLangLexicon::Impl {
   struct TextChunk {
     std::string text;
     LanguageType language = LanguageType::kNonChinese;
+  };
+
+  // G2P implementations populate only text and phonemes. model_suffix holds
+  // phonemes that affect model input but are not part of the term alignment,
+  // such as the separator between two espeak words or the pause after a
+  // clause comma.
+  struct G2pTerm {
+    std::string text;
+    std::string phoneme;
+    std::string model_suffix;
+
+    // True when this term was reconstructed from a gap between espeak's word
+    // spans rather than returned by espeak as a word or clause terminator.
+    //
+    // For example, espeak may return only "record" and "doesn't" for the
+    // source "record. doesn't". We reconstruct the missing period as
+    // {text: ".", phoneme: "."} and intentionally tokenize it for Kokoro.
+    // The flag records its origin so ApplyEspeakTerminator() can distinguish
+    // such recovered punctuation from punctuation that espeak did emit.
+    bool is_omitted_by_espeak = false;
+  };
+
+  // Preserve frontend sentence boundaries until the shared packing stage.
+  // A language implementation never creates TokenIDs or SplitSentence.
+  struct G2pSentence {
+    std::vector<G2pTerm> terms;
   };
 
  public:
@@ -85,66 +107,28 @@ class KokoroMultiLangLexicon::Impl {
       const std::string &_text, const std::string &voice) const {
     auto text_chunks = SplitTextIntoLanguageChunks(_text);
 
-    std::vector<SplitSentence> ans;
-
     // HasUnsegmentedScript() checks only the voice prefix and Unicode script
     // ranges. SplitTextIntoLanguageChunks() changes punctuation and
     // whitespace but never those script characters, so _text and the joined
     // normalized chunks produce the same result here.
     bool supports_term_alignments = !HasUnsegmentedScript(_text, voice);
 
-    auto append_sentences = [&](std::vector<SplitSentence> sentences) {
-      // ------------------------------------------------------------------
-      // Merge the per-chunk token IDs into sentence units. Every chunk
-      // returned above is already wrapped in BOS/EOS zeros:
-      //   - chunk with > 10+2 tokens      -> keep as its own sentence;
-      //   - ans empty                     -> push as-is;
-      //   - last sentence + chunk < 50    -> stitch into the last sentence
-      //     tokens, or chunk has < 5        (always true for punctuation
-      //     tokens                          chunks like "," -> {0, comma, 0});
-      //   - otherwise                     -> start a new sentence.
-      // Stitching replaces the last sentence's trailing EOS 0 with the
-      // chunk's first token (ids[1]) and appends ids[2..] (skipping the
-      // chunk's leading BOS 0), so boundaries are not duplicated.
-      for (auto &sentence : sentences) {
-        const auto &ids = sentence.token_ids.tokens;
-        if (ids.size() > 10 + 2) {
-          ans.push_back(std::move(sentence));
-        } else {
-          if (ans.empty()) {
-            ans.push_back(std::move(sentence));
-          } else {
-            size_t merged_size =
-                ans.back().token_ids.tokens.size() + ids.size() - 2;
-            bool fits_model = merged_size <=
-                              static_cast<size_t>(meta_data_.max_token_len + 1);
-            if (fits_model &&
-                ((ans.back().token_ids.tokens.size() + ids.size() < 50) ||
-                 (ids.size() < 5))) {
-              auto &last_ids = ans.back().token_ids.tokens;
-              last_ids.back() = ids[1];
-              last_ids.insert(last_ids.end(), ids.begin() + 2, ids.end());
-              ans.back().terms.insert(
-                  ans.back().terms.end(),
-                  std::make_move_iterator(sentence.terms.begin()),
-                  std::make_move_iterator(sentence.terms.end()));
-            } else {
-              ans.push_back(std::move(sentence));
-            }
-          }
-        }
-      }
-    };
-
+    std::vector<G2pSentence> g2p_sentences;
     for (const auto &chunk : text_chunks) {
-      std::vector<SplitSentence> sentences;
+      std::vector<G2pSentence> sentences;
       if (chunk.language == LanguageType::kChinese) {
-        sentences = ConvertChineseToSplitSentences(chunk.text);
+        sentences = G2pChinese(chunk.text);
       } else {
-        sentences = ConvertNonChineseToSplitSentences(chunk.text, voice);
+        sentences = G2pNonChinese(chunk.text, voice);
       }
-      append_sentences(std::move(sentences));
+      g2p_sentences.insert(g2p_sentences.end(),
+                           std::make_move_iterator(sentences.begin()),
+                           std::make_move_iterator(sentences.end()));
     }
+
+    // Language-specific work ends above. Tokenization, token-budget packing,
+    // and merging short sentences are shared by every current and future G2P.
+    auto ans = TokenizePackAndMerge(std::move(g2p_sentences));
 
     if (!supports_term_alignments) {
       for (auto &sentence : ans) {
@@ -257,7 +241,8 @@ class KokoroMultiLangLexicon::Impl {
     // Retain the existing normalization for ordinary text. Full-width
     // punctuation has already been mapped above so its origin is not lost.
     const std::vector<std::pair<std::string, std::string>> replacements = {
-        {":", ","}, {"\\s+", " "},
+        {":", ","},
+        {"\\s+", " "},
     };
     for (auto &chunk : normalized_chunks) {
       if (chunk.is_full_width_punctuation) {
@@ -265,8 +250,7 @@ class KokoroMultiLangLexicon::Impl {
       }
       for (const auto &replacement : replacements) {
         std::regex re(replacement.first);
-        chunk.text =
-            std::regex_replace(chunk.text, re, replacement.second);
+        chunk.text = std::regex_replace(chunk.text, re, replacement.second);
       }
     }
 
@@ -307,20 +291,16 @@ class KokoroMultiLangLexicon::Impl {
       SHERPA_ONNX_LOGE("After replacing punctuations and merging spaces:\n%s",
                        normalized_text.c_str());
       for (const auto &chunk : text_chunks) {
-        SHERPA_ONNX_LOGE(
-            "%s: %s",
-            chunk.language == LanguageType::kChinese ? "Chinese"
-                                                     : "Non-Chinese",
-            chunk.text.c_str());
+        SHERPA_ONNX_LOGE("%s: %s",
+                         chunk.language == LanguageType::kChinese
+                             ? "Chinese"
+                             : "Non-Chinese",
+                         chunk.text.c_str());
       }
     }
 
     return text_chunks;
   }
-
-  struct PhonemeToken {
-    int64_t id;
-  };
 
   bool HasUnsegmentedScript(const std::string &text,
                             const std::string &voice = "") const {
@@ -417,6 +397,87 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
+  std::vector<int64_t> TokenizePhonemes(const std::string &phonemes,
+                                        const std::string &text) const {
+    std::vector<int64_t> ans;
+    for (char32_t phoneme : Utf8ToUtf32(phonemes)) {
+      auto iter = phoneme2id_.find(phoneme);
+      if (iter == phoneme2id_.end()) {
+        SHERPA_ONNX_LOGE(
+            "Skip unknown phoneme from '%s'. Unicode codepoint: \\U+%04x.",
+            text.c_str(), static_cast<uint32_t>(phoneme));
+        continue;
+      }
+      ans.push_back(iter->second);
+    }
+    return ans;
+  }
+
+  Term TokenizeTerm(G2pTerm g2p_term) const {
+    Term term;
+    term.text = std::move(g2p_term.text);
+
+    auto phoneme_ids = TokenizePhonemes(g2p_term.phoneme, term.text);
+    term.phoneme = IdsToPhoneme(phoneme_ids);
+
+    // Tokenize recovered punctuation too. Written input such as
+    // "record. doesn't" therefore reaches Kokoro as "record . doesn't"
+    // instead of silently dropping the user's period just because espeak did
+    // not classify it as a clause terminator.
+    term.token_ids.tokens = std::move(phoneme_ids);
+
+    auto suffix_ids = TokenizePhonemes(g2p_term.model_suffix, term.text);
+    term.token_ids.tokens.insert(term.token_ids.tokens.end(),
+                                 suffix_ids.begin(), suffix_ids.end());
+    return term;
+  }
+
+  std::vector<SplitSentence> TokenizePackAndMerge(
+      std::vector<G2pSentence> g2p_sentences) const {
+    std::vector<SplitSentence> ans;
+
+    for (auto &g2p_sentence : g2p_sentences) {
+      std::vector<Term> terms;
+      terms.reserve(g2p_sentence.terms.size());
+      for (auto &g2p_term : g2p_sentence.terms) {
+        terms.push_back(TokenizeTerm(std::move(g2p_term)));
+      }
+
+      auto packed = PackTerms(std::move(terms));
+      for (auto &sentence : packed) {
+        const auto &ids = sentence.token_ids.tokens;
+
+        // Keep substantial packed units independent. Short units, including
+        // punctuation-only chunks, are joined when the model token budget
+        // permits it. Both BOS/EOS wrappers are already present here.
+        if (ids.size() > 10 + 2 || ans.empty()) {
+          ans.push_back(std::move(sentence));
+          continue;
+        }
+
+        size_t merged_size =
+            ans.back().token_ids.tokens.size() + ids.size() - 2;
+        bool fits_model =
+            merged_size <= static_cast<size_t>(meta_data_.max_token_len + 1);
+        if (fits_model &&
+            ((ans.back().token_ids.tokens.size() + ids.size() < 50) ||
+             (ids.size() < 5))) {
+          auto &last_ids = ans.back().token_ids.tokens;
+          last_ids.back() = ids[1];
+          last_ids.insert(last_ids.end(), ids.begin() + 2, ids.end());
+          ans.back().terms.insert(
+              ans.back().terms.end(),
+              std::make_move_iterator(sentence.terms.begin()),
+              std::make_move_iterator(sentence.terms.end()));
+        } else {
+          ans.push_back(std::move(sentence));
+        }
+      }
+    }
+
+    return ans;
+  }
+
   bool IsPunctuation(const std::string &text) const {
     if (text == ";" || text == ":" || text == "," || text == "." ||
         text == "!" || text == "?" || text == "—" || text == "…" ||
@@ -444,8 +505,7 @@ class KokoroMultiLangLexicon::Impl {
     };
     auto is_punctuation = [this](char32_t c) {
       std::string s = Utf32ToUtf8(c);
-      bool is_ascii =
-          c <= 0x7f && std::ispunct(static_cast<unsigned char>(c));
+      bool is_ascii = c <= 0x7f && std::ispunct(static_cast<unsigned char>(c));
       bool is_unicode =
           (c >= 0x0600 && c <= 0x061f) || (c >= 0x066a && c <= 0x066d) ||
           (c >= 0x2000 && c <= 0x206f) || (c >= 0x2e00 && c <= 0x2e7f) ||
@@ -511,8 +571,16 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
-  std::vector<SplitSentence> ConvertChineseToSplitSentences(
-      const std::string &text) const {
+  std::string PhonemesToString(
+      const std::vector<piper::Phoneme> &phonemes) const {
+    std::string ans;
+    for (auto phoneme : phonemes) {
+      ans += Utf32ToUtf8(phoneme);
+    }
+    return ans;
+  }
+
+  std::vector<G2pSentence> G2pChinese(const std::string &text) const {
     // Split the run into one UTF-8 character per element, e.g.
     // 中國人民不信邪 → [中, 國, 人, 民, 不, 信, 邪]. PhraseMatcher then groups
     // adjacent characters into the longest lexicon phrases (max 10 chars),
@@ -521,12 +589,11 @@ class KokoroMultiLangLexicon::Impl {
 
     if (debug_) {
       std::ostringstream os;
-      std::string sep = "";
-      for (const auto &w : words) {
-        os << sep << w;
+      std::string sep;
+      for (const auto &word : words) {
+        os << sep << word;
         sep = "_";
       }
-
 #if __OHOS__
       SHERPA_ONNX_LOGE("after splitting into UTF8:\n%{public}s",
                        os.str().c_str());
@@ -535,542 +602,252 @@ class KokoroMultiLangLexicon::Impl {
 #endif
     }
 
-    std::vector<Term> terms;
-
-    // Walk the whole Chinese run phrase by phrase. PackTerms keeps every
-    // phrase whole at sentence boundaries unless one phrase alone is larger
-    // than the model budget, in which case it emits repeated-text fragments.
+    G2pSentence sentence;
     PhraseMatcher matcher(&all_words_, words, debug_);
-
-    for (const std::string &w : matcher) {
-      auto ids = ConvertWordToIds(w);
+    for (const std::string &word : matcher) {
+      auto ids = ConvertWordToIds(word);
       if (ids.empty()) {
 #if __OHOS__
-        SHERPA_ONNX_LOGE("Ignore OOV '%{public}s'", w.c_str());
+        SHERPA_ONNX_LOGE("Ignore OOV '%{public}s'", word.c_str());
 #else
-        SHERPA_ONNX_LOGE("Ignore OOV '%s'", w.c_str());
+        SHERPA_ONNX_LOGE("Ignore OOV '%s'", word.c_str());
 #endif
         continue;
       }
 
-      Term term;
-      term.text = w;
-      term.token_ids.tokens.assign(ids.begin(), ids.end());
-      term.phoneme = IdsToPhoneme(term.token_ids.tokens);
-      terms.push_back(std::move(term));
-    }  // for (const std::string &w : matcher)
-
-    auto ans = PackTerms(std::move(terms));
-
-    if (debug_) {
-      for (const auto &v : ans) {
-        std::ostringstream os;
-        os << "\n";
-        std::string sep;
-        for (auto i : v.token_ids.tokens) {
-          os << sep << i;
-          sep = " ";
-        }
-        os << "\n";
-        SHERPA_ONNX_LOGE("%s", os.str().c_str());
-      }
+      G2pTerm term;
+      term.text = word;
+      // The lexicon is stored as token IDs, so convert its pronunciation back
+      // to phonemes here. The shared stage tokenizes it after all languages
+      // have finished G2P.
+      term.phoneme = IdsToPhoneme(std::vector<int64_t>(ids.begin(), ids.end()));
+      sentence.terms.push_back(std::move(term));
     }
 
+    if (sentence.terms.empty()) {
+      return {};
+    }
+    std::vector<G2pSentence> ans;
+    ans.push_back(std::move(sentence));
     return ans;
   }
 
-  std::vector<PhonemeToken> ConvertPhonemes(
-      const std::vector<piper::Phoneme> &phonemes) const {
-    std::vector<PhonemeToken> ans;
-    for (auto p : phonemes) {
-      auto iter = phoneme2id_.find(p);
-      if (iter == phoneme2id_.end()) {
-        SHERPA_ONNX_LOGE("Skip unknown phonemes. Unicode codepoint: \\U+%04x.",
-                         static_cast<uint32_t>(p));
+  void AppendSourceGap(const std::u32string &text, size_t begin, size_t end,
+                       G2pSentence *sentence) const {
+    // espeak's word-pair API reports spans only for spoken words. Preserve
+    // every non-whitespace character between those spans as a term, and mark
+    // that the term was recovered rather than emitted by espeak. Its written
+    // character is also its phoneme so the shared tokenization stage sends
+    // punctuation such as '.', ',' and ';' to Kokoro.
+    end = std::min(end, text.size());
+    for (size_t i = std::min(begin, end); i != end; ++i) {
+      char32_t c = text[i];
+      if (c <= 0x7f && std::isspace(static_cast<unsigned char>(c))) {
         continue;
       }
-      ans.push_back({iter->second});
-      if (p == U'.') {
-        ans.push_back({token2id_.at(" ")});
-      }
+      std::string punctuation = Utf32ToUtf8(c);
+      sentence->terms.push_back({punctuation, punctuation, "", true});
     }
-    return ans;
   }
 
-  std::vector<PhonemeToken> Phonemize(const std::string &text,
-                                      const std::string &voice) const {
-    piper::eSpeakPhonemeConfig config;
-    config.voice = voice;
-    std::vector<std::vector<piper::Phoneme>> phonemes;
-    CallPhonemizeEspeak(text, config, &phonemes);
-    std::vector<PhonemeToken> ans;
-    for (const auto &p : phonemes) {
-      auto tokens = ConvertPhonemes(p);
-      ans.insert(ans.end(), std::make_move_iterator(tokens.begin()),
-                 std::make_move_iterator(tokens.end()));
+  bool ApplyEspeakTerminator(int32_t terminator,
+                             const piper::eSpeakPhonemeConfig &config,
+                             size_t gap_term_begin,
+                             G2pSentence *sentence) const {
+    int32_t punctuation = terminator & 0x000fffff;
+    piper::Phoneme phoneme = 0;
+    bool append_space = false;
+    if (punctuation == CLAUSE_PERIOD) {
+      phoneme = config.period;
+      // Preserve Kokoro's existing model input: ConvertPhonemes() appended a
+      // space after an espeak period, although that space is not displayed in
+      // the public term alignment.
+      append_space = phoneme == U'.';
+    } else if (punctuation == CLAUSE_QUESTION) {
+      phoneme = config.question;
+    } else if (punctuation == CLAUSE_EXCLAMATION) {
+      phoneme = config.exclamation;
+    } else if (punctuation == CLAUSE_COMMA) {
+      phoneme = config.comma;
+      append_space = true;
+    } else if (punctuation == CLAUSE_COLON) {
+      phoneme = config.colon;
+      append_space = true;
+    } else if (punctuation == CLAUSE_SEMICOLON) {
+      phoneme = config.semicolon;
+      append_space = true;
     }
-    return ans;
+
+    if (phoneme != 0) {
+      std::string punctuation_text = Utf32ToUtf8(phoneme);
+      size_t target = sentence->terms.size();
+      for (size_t i = gap_term_begin; i != sentence->terms.size(); ++i) {
+        if (sentence->terms[i].is_omitted_by_espeak &&
+            sentence->terms[i].text == punctuation_text) {
+          target = i;
+          break;
+        }
+      }
+      if (target == sentence->terms.size()) {
+        for (size_t i = gap_term_begin; i != sentence->terms.size(); ++i) {
+          if (sentence->terms[i].is_omitted_by_espeak &&
+              IsPunctuation(sentence->terms[i].text)) {
+            target = i;
+            break;
+          }
+        }
+      }
+      if (target == sentence->terms.size()) {
+        sentence->terms.push_back({punctuation_text, "", ""});
+        target = sentence->terms.size() - 1;
+      }
+
+      auto &term = sentence->terms[target];
+      term.phoneme = punctuation_text;
+      // This source-gap term corresponds to the terminator espeak did emit,
+      // so it is no longer classified as omitted. Other punctuation in the
+      // same gap remains marked as recovered and is still tokenized normally.
+      term.is_omitted_by_espeak = false;
+      if (append_space) {
+        term.model_suffix = Utf32ToUtf8(config.space);
+      }
+    }
+
+    return (terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE;
   }
 
-  size_t BestPrefixLength(const std::vector<PhonemeToken> &full, size_t begin,
-                          size_t available,
-                          const std::vector<PhonemeToken> &hint) const {
-    if (available == 0 || hint.empty()) {
-      return 0;
-    }
-
-    size_t max_candidate =
-        std::min(available, std::max<size_t>(32, hint.size() * 2 + 8));
-    std::vector<int32_t> previous(hint.size() + 1);
-    std::vector<int32_t> current(hint.size() + 1);
-    for (size_t i = 0; i <= hint.size(); ++i) {
-      previous[i] = static_cast<int32_t>(i);
-    }
-
-    size_t best_len = 0;
-    int32_t best_score = previous.back() * 4;
-    int32_t space_id = token2id_.at(" ");
-    for (size_t len = 1; len <= max_candidate; ++len) {
-      current[0] = static_cast<int32_t>(len);
-      for (size_t j = 1; j <= hint.size(); ++j) {
-        int32_t substitution =
-            previous[j - 1] +
-            (full[begin + len - 1].id == hint[j - 1].id ? 0 : 1);
-        current[j] = std::min({previous[j] + 1, current[j - 1] + 1,
-                               substitution});
-      }
-      int32_t score = current.back() * 4 +
-                      std::abs(static_cast<int32_t>(len) -
-                               static_cast<int32_t>(hint.size()));
-      if (full[begin + len - 1].id == space_id) {
-        --score;
-      }
-      if (score < best_score) {
-        best_score = score;
-        best_len = len;
-      }
-      previous.swap(current);
-    }
-    return best_len == 0 ? 1 : best_len;
-  }
-
-  std::vector<size_t> AlignTermBoundaries(
-      const std::vector<PhonemeToken> &full,
-      const std::vector<std::vector<PhonemeToken>> &term_hints) const {
-    std::vector<PhonemeToken> hints;
-    std::vector<size_t> hint_ends;
-    for (const auto &term : term_hints) {
-      hints.insert(hints.end(), term.begin(), term.end());
-      hint_ends.push_back(hints.size());
-    }
-
-    std::vector<size_t> ans(term_hints.size());
-    if (term_hints.empty()) {
-      return ans;
-    }
-    if (hints.empty()) {
-      ans.back() = full.size();
-      return ans;
-    }
-
-    const size_t num_rows = hints.size() + 1;
-    const size_t num_cols = full.size() + 1;
-    constexpr size_t kMaxAlignmentCells = 32 * 1024 * 1024;
-    bool can_use_global_alignment =
-        num_cols != 0 && num_rows <= kMaxAlignmentCells / num_cols;
-
-    if (!can_use_global_alignment) {
-      size_t cursor = 0;
-      for (size_t i = 0; i != term_hints.size(); ++i) {
-        size_t len = full.size() - cursor;
-        if (i + 1 != term_hints.size()) {
-          len = BestPrefixLength(full, cursor, full.size() - cursor,
-                                 term_hints[i]);
-        }
-        cursor += len;
-        ans[i] = cursor;
-      }
-      return ans;
-    }
-
-    // Globally align the contextual one-pass espeak output with the
-    // concatenated per-term hints. This prevents a locally greedy match from
-    // shifting every following word when contextual output contains extra
-    // phonemes, for example when a leading period is spoken as "dot".
-    // Direction: 0 consumes both sequences, 1 consumes a hint, and 2 consumes
-    // a contextual token.
-    std::vector<uint8_t> directions(num_rows * num_cols);
-    std::vector<int32_t> previous(num_cols);
-    std::vector<int32_t> current(num_cols);
-    for (size_t j = 0; j != num_cols; ++j) {
-      previous[j] = static_cast<int32_t>(j);
-      if (j != 0) {
-        directions[j] = 2;
-      }
-    }
-
-    for (size_t i = 1; i != num_rows; ++i) {
-      current[0] = static_cast<int32_t>(i);
-      directions[i * num_cols] = 1;
-      for (size_t j = 1; j != num_cols; ++j) {
-        bool is_match = hints[i - 1].id == full[j - 1].id;
-        // A mismatch costs the same as deleting and inserting. Prefer those
-        // operations on ties so an unrelated contextual prefix such as the
-        // spoken word "dot" cannot consume the first phonemes of the next
-        // written word through cheap substitutions.
-        int32_t diagonal = previous[j - 1] + (is_match ? 0 : 2);
-        int32_t remove_hint = previous[j] + 1;
-        int32_t insert_contextual = current[j - 1] + 1;
-
-        int32_t value = insert_contextual;
-        uint8_t direction = 2;
-        if (remove_hint < value) {
-          value = remove_hint;
-          direction = 1;
-        }
-        if (diagonal < value || (is_match && diagonal == value)) {
-          value = diagonal;
-          direction = 0;
-        }
-        current[j] = value;
-        directions[i * num_cols + j] = direction;
-      }
-      previous.swap(current);
-    }
-
-    std::vector<uint8_t> reversed_operations;
-    reversed_operations.reserve(hints.size() + full.size());
-    size_t i = hints.size();
-    size_t j = full.size();
-    while (i != 0 || j != 0) {
-      uint8_t direction = directions[i * num_cols + j];
-      reversed_operations.push_back(direction);
-      if (direction == 0) {
-        --i;
-        --j;
-      } else if (direction == 1) {
-        --i;
-      } else {
-        --j;
-      }
-    }
-    std::reverse(reversed_operations.begin(), reversed_operations.end());
-
-    size_t hint_cursor = 0;
-    size_t full_cursor = 0;
-    size_t operation_index = 0;
-    auto apply_operation = [&]() {
-      uint8_t operation = reversed_operations[operation_index++];
-      if (operation == 0) {
-        ++hint_cursor;
-        ++full_cursor;
-      } else if (operation == 1) {
-        ++hint_cursor;
-      } else {
-        ++full_cursor;
-      }
-    };
-
-    for (size_t term_index = 0; term_index != hint_ends.size();
-         ++term_index) {
-      size_t hint_end = hint_ends[term_index];
-      while (operation_index != reversed_operations.size() &&
-             hint_cursor < hint_end) {
-        apply_operation();
-      }
-
-      // Insertions at a term boundary belong to the preceding term. When an
-      // empty-hint term follows at the same boundary (usually punctuation),
-      // leave them for that term instead.
-      bool followed_by_empty_term =
-          term_index + 1 != hint_ends.size() &&
-          hint_ends[term_index + 1] == hint_end;
-      if (!followed_by_empty_term) {
-        while (operation_index != reversed_operations.size() &&
-               hint_cursor == hint_end &&
-               reversed_operations[operation_index] == 2) {
-          apply_operation();
-        }
-      }
-      ans[term_index] = full_cursor;
-    }
-
-    return ans;
-  }
-
-  std::vector<SplitSentence> ConvertTextToSplitSentencesWithEspeak(
+  std::vector<G2pSentence> G2pNonChineseWithEspeak(
       const std::string &text, const std::string &voice) const {
     piper::eSpeakPhonemeConfig config;
     config.voice = voice;
-    std::vector<std::vector<piper::Phoneme>> phoneme_groups;
-    CallPhonemizeEspeak(text, config, &phoneme_groups);
 
-    std::vector<PhonemeToken> full;
-    std::vector<size_t> group_ends;
-    for (const auto &group : phoneme_groups) {
-      auto tokens = ConvertPhonemes(group);
-      full.insert(full.end(), std::make_move_iterator(tokens.begin()),
-                  std::make_move_iterator(tokens.end()));
-      group_ends.push_back(full.size());
-    }
-    if (full.empty()) {
+    std::vector<EspeakClausePhonemes> clauses;
+    if (!CallPhonemizeEspeakWithWordPhonemes(text, config, &clauses)) {
       return {};
     }
 
-    auto written_terms = SplitWrittenTerms(text);
-    if (written_terms.empty()) {
-      written_terms.push_back(text);
-    }
+    std::vector<G2pSentence> ans;
+    G2pSentence sentence;
+    const auto source = Utf8ToUtf32(text);
+    size_t source_cursor = 0;
+    auto flush = [&]() {
+      if (!sentence.terms.empty()) {
+        ans.push_back(std::move(sentence));
+        sentence = {};
+      }
+    };
 
-    std::vector<std::vector<PhonemeToken>> term_hints;
-    term_hints.reserve(written_terms.size());
-    for (const auto &term : written_terms) {
-      term_hints.push_back(Phonemize(term, voice));
+    for (size_t clause_index = 0; clause_index != clauses.size();
+         ++clause_index) {
+      const auto &clause = clauses[clause_index];
+      for (size_t i = 0; i != clause.words.size(); ++i) {
+        const auto &word = clause.words[i];
+        size_t word_begin = static_cast<size_t>(std::max(0, word.position));
+        size_t word_end =
+            word_begin + static_cast<size_t>(std::max(0, word.length));
+
+        // eSpeak returns spans only for spoken words. Recover non-whitespace
+        // source characters before this word so alignment terms do not lose
+        // punctuation that eSpeak kept inside the clause. For example, in
+        // "stop., and", the gap between "stop" and "and" contains both '.'
+        // and ',', even when neither appears in the returned word pairs.
+        AppendSourceGap(source, source_cursor, word_begin, &sentence);
+
+        G2pTerm term;
+        term.text = word.text;
+        term.phoneme = PhonemesToString(word.phonemes);
+        if (i + 1 != clause.words.size()) {
+          // espeak's flat clause output contains one space between adjacent
+          // word pairs. Keep it in model input without exposing it as part of
+          // either term's public phoneme string.
+          term.model_suffix = Utf32ToUtf8(config.space);
+        }
+        sentence.terms.push_back(std::move(term));
+        source_cursor = std::min(word_end, source.size());
+      }
+
+      size_t clause_end = source.size();
+      for (size_t i = clause_index + 1; i != clauses.size(); ++i) {
+        if (!clauses[i].words.empty()) {
+          clause_end = static_cast<size_t>(
+              std::max(0, clauses[i].words.front().position));
+          break;
+        }
+      }
+      size_t gap_term_begin = sentence.terms.size();
+
+      // Recover the source tail after this clause's last returned word. This
+      // is also required when eSpeak combines written sentences into one
+      // clause, e.g. "record. doesn't": the period lies between word spans
+      // and may not be reported as clause.terminator. ApplyEspeakTerminator()
+      // below then identifies any punctuation that eSpeak did emit into its
+      // phoneme stream. Other recovered punctuation remains marked as omitted
+      // by espeak, but is still tokenized and sent to Kokoro.
+      AppendSourceGap(source, source_cursor, clause_end, &sentence);
+      source_cursor = std::min(clause_end, source.size());
+
+      bool is_sentence = ApplyEspeakTerminator(clause.terminator, config,
+                                               gap_term_begin, &sentence);
+      if (is_sentence) {
+        flush();
+      }
     }
+    flush();
+
     if (debug_) {
-      std::vector<int64_t> full_ids;
-      for (const auto &token : full) {
-        full_ids.push_back(token.id);
-      }
-      SHERPA_ONNX_LOGE("Contextual phonemes: %s",
-                       IdsToPhoneme(full_ids).c_str());
-      for (size_t i = 0; i != term_hints.size(); ++i) {
-        std::vector<int64_t> hint_ids;
-        for (const auto &token : term_hints[i]) {
-          hint_ids.push_back(token.id);
+      for (const auto &group : ans) {
+        for (const auto &term : group.terms) {
+          SHERPA_ONNX_LOGE("G2P term '%s': %s", term.text.c_str(),
+                           term.phoneme.c_str());
         }
-        SHERPA_ONNX_LOGE("Term hint '%s': %s", written_terms[i].c_str(),
-                         IdsToPhoneme(hint_ids).c_str());
       }
     }
-    auto term_ends = AlignTermBoundaries(full, term_hints);
-
-    // A punctuation mark can be silent in isolation but spoken in context;
-    // for example, a period immediately before an English word may become
-    // "dot". If global alignment leaves such punctuation empty, anchor the
-    // following term's exact hint and assign the contextual prefix to the
-    // punctuation term.
-    for (size_t i = 0; i + 1 < written_terms.size(); ++i) {
-      size_t begin = i == 0 ? 0 : term_ends[i - 1];
-      if (!IsPunctuation(written_terms[i]) || term_ends[i] != begin ||
-          term_hints[i + 1].empty()) {
-        continue;
-      }
-
-      size_t search_end = term_ends[i + 1];
-      const auto &next_hint = term_hints[i + 1];
-      if (search_end == begin) {
-        continue;
-      }
-
-      size_t best_candidate = begin;
-      size_t best_length = 0;
-      int32_t best_distance = std::numeric_limits<int32_t>::max();
-      int32_t best_score = std::numeric_limits<int32_t>::max();
-      for (size_t candidate = begin;
-           candidate < search_end; ++candidate) {
-        size_t max_length = std::min(
-            search_end - candidate,
-            std::max<size_t>(8, next_hint.size() * 2 + 4));
-        std::vector<int32_t> previous(next_hint.size() + 1);
-        std::vector<int32_t> current(next_hint.size() + 1);
-        for (size_t k = 0; k <= next_hint.size(); ++k) {
-          previous[k] = static_cast<int32_t>(k);
-        }
-        for (size_t length = 1; length <= max_length; ++length) {
-          current[0] = static_cast<int32_t>(length);
-          for (size_t k = 1; k <= next_hint.size(); ++k) {
-            int32_t substitution =
-                previous[k - 1] +
-                (full[candidate + length - 1].id == next_hint[k - 1].id ? 0
-                                                                        : 1);
-            current[k] =
-                std::min({previous[k] + 1, current[k - 1] + 1, substitution});
-          }
-          int32_t distance = current.back();
-          int32_t score =
-              distance * 4 +
-              std::abs(static_cast<int32_t>(length) -
-                       static_cast<int32_t>(next_hint.size()));
-          if (score < best_score) {
-            best_score = score;
-            best_distance = distance;
-            best_candidate = candidate;
-            best_length = length;
-          }
-          previous.swap(current);
-        }
-      }
-
-      size_t comparison_length = std::max(best_length, next_hint.size());
-      if (best_candidate != begin &&
-          static_cast<size_t>(best_distance * 2) <= comparison_length + 1) {
-        term_ends[i] = best_candidate;
-      }
-    }
-
-    std::vector<Term> aligned;
-    size_t cursor = 0;
-    for (size_t i = 0; i != written_terms.size(); ++i) {
-      size_t end = term_ends[i];
-      Term term;
-      term.text = written_terms[i];
-      for (size_t j = cursor; j != end; ++j) {
-        term.token_ids.tokens.push_back(full[j].id);
-      }
-      term.phoneme = IdsToPhoneme(term.token_ids.tokens);
-      aligned.push_back(std::move(term));
-      cursor = end;
-    }
-
-    // Respect sentence boundaries returned by espeak. If a frontend term
-    // crosses one, repeat its written text and expose the corresponding
-    // partial phoneme span on each side.
-    std::vector<SplitSentence> ans;
-    std::vector<Term> group_terms;
-    std::vector<Term> pending_terms;
-    size_t absolute = 0;
-    size_t group_index = 0;
-    for (const auto &term : aligned) {
-      if (term.token_ids.tokens.empty()) {
-        if (!group_terms.empty()) {
-          group_terms.push_back(term);
-        } else {
-          pending_terms.push_back(term);
-        }
-        continue;
-      }
-      size_t local = 0;
-      while (local < term.token_ids.tokens.size()) {
-        while (group_index < group_ends.size() &&
-               absolute == group_ends[group_index]) {
-          auto packed = PackTerms(std::move(group_terms));
-          ans.insert(ans.end(), std::make_move_iterator(packed.begin()),
-                     std::make_move_iterator(packed.end()));
-          group_terms.clear();
-          ++group_index;
-        }
-        size_t boundary = group_index < group_ends.size()
-                              ? group_ends[group_index]
-                              : full.size();
-        size_t count = std::min(term.token_ids.tokens.size() - local,
-                                boundary - absolute);
-        Term fragment;
-        fragment.text = term.text;
-        fragment.token_ids.tokens.assign(term.token_ids.tokens.begin() + local,
-                                         term.token_ids.tokens.begin() + local +
-                                             count);
-        fragment.phoneme = IdsToPhoneme(fragment.token_ids.tokens);
-        if (!pending_terms.empty()) {
-          group_terms.insert(group_terms.end(),
-                             std::make_move_iterator(pending_terms.begin()),
-                             std::make_move_iterator(pending_terms.end()));
-          pending_terms.clear();
-        }
-        group_terms.push_back(std::move(fragment));
-        local += count;
-        absolute += count;
-      }
-    }
-    if (!pending_terms.empty()) {
-      if (!group_terms.empty()) {
-        group_terms.insert(group_terms.end(),
-                           std::make_move_iterator(pending_terms.begin()),
-                           std::make_move_iterator(pending_terms.end()));
-      } else if (!ans.empty()) {
-        ans.back().terms.insert(
-            ans.back().terms.end(),
-            std::make_move_iterator(pending_terms.begin()),
-            std::make_move_iterator(pending_terms.end()));
-      }
-    }
-    auto packed = PackTerms(std::move(group_terms));
-    ans.insert(ans.end(), std::make_move_iterator(packed.begin()),
-               std::make_move_iterator(packed.end()));
     return ans;
   }
 
-  std::vector<SplitSentence> ConvertNonChineseToSplitSentences(
-      const std::string &text, const std::string &voice) const {
-    if (IsPunctuation(text)) {
-      Term term;
-      term.text = text;
-      term.phoneme = text;
-      term.token_ids.tokens = {token2id_.at(text)};
-      return {MakeSentence({std::move(term)})};
-    }
-
-    if (!voice.empty() && HasUnsegmentedScript(text, voice)) {
-      auto token_ids = ConvertTextToTokenIdsKokoroOrKitten(
-          phoneme2id_, meta_data_.max_token_len, text, voice);
-      std::vector<SplitSentence> ans;
-      ans.reserve(token_ids.size());
-      for (auto &ids : token_ids) {
-        SplitSentence sentence;
-        sentence.token_ids = std::move(ids);
-        ans.push_back(std::move(sentence));
-      }
-      return ans;
-    }
-
-    // Long non-Chinese runs are packed at term boundaries after a contextual,
-    // one-pass espeak-ng conversion.
-    if (!voice.empty()) {
-      return ConvertTextToSplitSentencesWithEspeak(text, voice);
-    }
-
-    // If voice is empty, we split the text into words and use the lexicon
-    // to lookup the pronunciation of each word, fallback to espeak if
-    // a word is not in the lexicon.
-
+  std::vector<G2pSentence> G2pNonChineseWithoutVoice(
+      const std::string &text) const {
+    // Preserve the legacy no-voice behavior: use the lexicon first and invoke
+    // espeak only for an OOV word.
     std::vector<std::string> words = SplitWrittenTerms(text);
     if (debug_) {
       std::ostringstream os;
       os << "After splitting to words: ";
       std::string sep;
-      for (const auto &w : words) {
-        os << sep << w;
+      for (const auto &word : words) {
+        os << sep << word;
         sep = "_";
       }
       SHERPA_ONNX_LOGE("%s", os.str().c_str());
     }
 
-    std::vector<SplitSentence> ans;
-    // The voice-empty path also packs complete word terms. Punctuation
-    // ". ! ? ;" ends a sentence.
-    int32_t space_id = token2id_.at(" ");
-
-    std::vector<Term> terms;
-
+    std::vector<G2pSentence> ans;
+    G2pSentence sentence;
     auto flush = [&]() {
-      auto packed = PackTerms(std::move(terms));
-      ans.insert(ans.end(), std::make_move_iterator(packed.begin()),
-                 std::make_move_iterator(packed.end()));
-      terms.clear();
+      if (!sentence.terms.empty()) {
+        ans.push_back(std::move(sentence));
+        sentence = {};
+      }
     };
 
-    for (const auto &_word : words) {
-      auto word = ToLowerCase(_word);
-      if (IsPunctuation(word)) {
-        Term term;
-        term.text = _word;
-        term.phoneme = word;
-        term.token_ids.tokens = {token2id_.at(word)};
-        terms.push_back(std::move(term));
+    for (const auto &written_word : words) {
+      auto word = ToLowerCase(written_word);
+      G2pTerm term;
+      term.text = written_word;
 
+      if (IsPunctuation(word)) {
+        term.phoneme = word;
+        sentence.terms.push_back(std::move(term));
         if (word == "." || word == "!" || word == "?" || word == ";") {
-          // Note: You can add more punctuations here to split the text
-          // into sentences. We just use four here: .!?;
           flush();
         }
-      } else if (word2ids_.count(word)) {
+        continue;
+      }
+
+      if (word2ids_.count(word)) {
         const auto &ids = word2ids_.at(word);
-        Term term;
-        term.text = _word;
-        term.token_ids.tokens.assign(ids.begin(), ids.end());
-        term.phoneme = IdsToPhoneme(term.token_ids.tokens);
-        term.token_ids.tokens.push_back(space_id);
-        terms.push_back(std::move(term));
+        term.phoneme =
+            IdsToPhoneme(std::vector<int64_t>(ids.begin(), ids.end()));
       } else {
         if (debug_) {
           SHERPA_ONNX_LOGE("Use espeak-ng to handle the OOV: '%s'",
@@ -1078,56 +855,38 @@ class KokoroMultiLangLexicon::Impl {
         }
 
         piper::eSpeakPhonemeConfig config;
-
         config.voice = meta_data_.voice;
-
-        std::vector<std::vector<piper::Phoneme>> phonemes;
-
-        CallPhonemizeEspeak(word, config, &phonemes);
-        // Note phonemes[i] contains a vector of unicode codepoints;
-        // we need to convert them to utf8
-
-        std::vector<int64_t> ids;
-        for (const auto &v : phonemes) {
-          for (const auto p : v) {
-            auto token = Utf32ToUtf8(p);
-            if (token2id_.count(token)) {
-              ids.push_back(token2id_.at(token));
-            } else {
-              if (debug_) {
-                SHERPA_ONNX_LOGE("Skip OOV token '%s' from '%s'", token.c_str(),
-                                 word.c_str());
-              }
-            }
-          }
+        std::vector<std::vector<piper::Phoneme>> phoneme_groups;
+        CallPhonemizeEspeak(word, config, &phoneme_groups);
+        for (const auto &phonemes : phoneme_groups) {
+          term.phoneme += PhonemesToString(phonemes);
         }
-
-        Term term;
-        term.text = _word;
-        term.token_ids.tokens = std::move(ids);
-        term.phoneme = IdsToPhoneme(term.token_ids.tokens);
-        term.token_ids.tokens.push_back(space_id);
-        terms.push_back(std::move(term));
       }
+
+      // This path historically placed a space after every word, regardless of
+      // whether its pronunciation came from the lexicon or espeak.
+      term.model_suffix = " ";
+      sentence.terms.push_back(std::move(term));
     }
 
     flush();
+    return ans;
+  }
 
-    if (debug_) {
-      for (const auto &v : ans) {
-        std::ostringstream os;
-        os << "\n";
-        std::string sep;
-        for (auto i : v.token_ids.tokens) {
-          os << sep << i;
-          sep = " ";
-        }
-        os << "\n";
-        SHERPA_ONNX_LOGE("%s", os.str().c_str());
-      }
+  std::vector<G2pSentence> G2pNonChinese(const std::string &text,
+                                         const std::string &voice) const {
+    if (IsPunctuation(text)) {
+      G2pSentence sentence;
+      sentence.terms.push_back({text, text, ""});
+      std::vector<G2pSentence> ans;
+      ans.push_back(std::move(sentence));
+      return ans;
     }
 
-    return ans;
+    if (!voice.empty()) {
+      return G2pNonChineseWithEspeak(text, voice);
+    }
+    return G2pNonChineseWithoutVoice(text);
   }
 
   void InitTokens(const std::string &tokens) {
@@ -1278,8 +1037,7 @@ std::vector<TokenIDs> KokoroMultiLangLexicon::ConvertTextToTokenIds(
   return impl_->ConvertTextToTokenIds(text, voice);
 }
 
-std::vector<SplitSentence>
-KokoroMultiLangLexicon::ConvertTextToSplitSentences(
+std::vector<SplitSentence> KokoroMultiLangLexicon::ConvertTextToSplitSentences(
     const std::string &text, const std::string &voice /*= ""*/) const {
   return impl_->ConvertTextToSplitSentences(text, voice);
 }
