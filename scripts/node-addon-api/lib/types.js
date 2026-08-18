@@ -424,8 +424,17 @@
  * @typedef {Object} GeneratedAudio
  * @property {Float32Array} samples - The generated/denoised audio samples.
  * @property {number} sampleRate - Sample rate in Hz.
+ * @property {TermAlignment[]|null} [termAlignments] - Kokoro v1.0+ frontend terms.
  * @see src/non-streaming-tts.cc
  * @see src/non-streaming-speech-denoiser.cc
+ */
+
+/**
+ * @typedef {Object} TermAlignment
+ * @property {string} text
+ * @property {string} phoneme
+ * @property {number} startTs - Currently -1 because timing is unavailable.
+ * @property {number} endTs - Currently -1 because timing is unavailable.
  */
 
 /**

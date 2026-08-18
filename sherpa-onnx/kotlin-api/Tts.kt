@@ -116,6 +116,7 @@ data class OfflineTtsConfig(
 class GeneratedAudio(
     val samples: FloatArray,
     val sampleRate: Int,
+    val termAlignments: Array<TermAlignment>? = null,
 ) {
     fun save(filename: String) =
         saveImpl(filename = filename, samples = samples, sampleRate = sampleRate)
@@ -126,6 +127,13 @@ class GeneratedAudio(
         sampleRate: Int
     ): Boolean
 }
+
+class TermAlignment(
+    val text: String,
+    val phoneme: String,
+    val startTs: Float,
+    val endTs: Float,
+)
 
 data class GenerationConfig(
     var silenceScale: Float = 0.2f,
@@ -233,10 +241,8 @@ class OfflineTts(
     private external fun getSampleRate(ptr: Long): Int
     private external fun getNumSpeakers(ptr: Long): Int
 
-    // The returned array has two entries:
-    //  - the first entry is an 1-D float array containing audio samples.
-    //    Each sample is normalized to the range [-1, 1]
-    //  - the second entry is the sample rate
+    // The returned object contains normalized samples, the sample rate, and
+    // optional Kokoro v1.0+ term alignments.
     private external fun generateImpl(
         ptr: Long,
         text: String,

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,9 +55,20 @@ struct OfflineTtsConfig {
   std::string ToString() const;
 };
 
+struct TermAlignment {
+  std::string text;
+  std::string phoneme;
+  float start_ts = -1.0f;
+  float end_ts = -1.0f;
+};
+
 struct GeneratedAudio {
   std::vector<float> samples;
   int32_t sample_rate;
+
+  // Kokoro v1.0 and later populate this from frontend terms. Other offline
+  // TTS implementations leave it unset.
+  std::optional<std::vector<TermAlignment>> term_alignments;
 
   // Silence means pause here.
   // If scale > 1, then it increases the duration of a pause

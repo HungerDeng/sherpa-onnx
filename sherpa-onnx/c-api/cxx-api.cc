@@ -605,6 +605,15 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
 
   ans.samples = std::vector<float>{audio->samples, audio->samples + audio->n};
   ans.sample_rate = audio->sample_rate;
+  if (audio->term_alignments) {
+    ans.term_alignments.emplace();
+    ans.term_alignments->reserve(audio->num_term_alignments);
+    for (int32_t i = 0; i != audio->num_term_alignments; ++i) {
+      const auto &a = audio->term_alignments[i];
+      ans.term_alignments->push_back(
+          {a.text, a.phoneme, a.start_ts, a.end_ts});
+    }
+  }
 
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
   return ans;
@@ -641,6 +650,15 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
 
   ans.samples = std::vector<float>{audio->samples, audio->samples + audio->n};
   ans.sample_rate = audio->sample_rate;
+  if (audio->term_alignments) {
+    ans.term_alignments.emplace();
+    ans.term_alignments->reserve(audio->num_term_alignments);
+    for (int32_t i = 0; i != audio->num_term_alignments; ++i) {
+      const auto &a = audio->term_alignments[i];
+      ans.term_alignments->push_back(
+          {a.text, a.phoneme, a.start_ts, a.end_ts});
+    }
+  }
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
   return ans;
 }
@@ -653,6 +671,7 @@ std::shared_ptr<GeneratedAudio> OfflineTts::Generate2(
   GeneratedAudio *ans = new GeneratedAudio;
   ans->samples = std::move(audio.samples);
   ans->sample_rate = audio.sample_rate;
+  ans->term_alignments = std::move(audio.term_alignments);
 
   return std::shared_ptr<GeneratedAudio>(ans);
 }
@@ -665,6 +684,7 @@ std::shared_ptr<GeneratedAudio> OfflineTts::Generate2(
   GeneratedAudio *ans = new GeneratedAudio;
   ans->samples = std::move(audio.samples);
   ans->sample_rate = audio.sample_rate;
+  ans->term_alignments = std::move(audio.term_alignments);
 
   return std::shared_ptr<GeneratedAudio>(ans);
 }

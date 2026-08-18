@@ -185,9 +185,17 @@ type
     class operator Initialize({$IFDEF FPC}var{$ELSE}out{$ENDIF} Dest: TSherpaOnnxOfflineTtsConfig);
   end;
 
+  TSherpaOnnxTermAlignment = record
+    Text: AnsiString;
+    Phoneme: AnsiString;
+    StartTs: Single;
+    EndTs: Single;
+  end;
+
   TSherpaOnnxGeneratedAudio = record
     Samples: array of Single;
     SampleRate: Integer;
+    TermAlignments: array of TSherpaOnnxTermAlignment;
   end;
 
   TSherpaOnnxOfflineTts = class
@@ -1243,10 +1251,23 @@ type
 
   PSherpaOnnxOfflineTtsConfig = ^SherpaOnnxOfflineTtsConfig;
 
+  SherpaOnnxTermAlignment = record
+    Text: PAnsiChar;
+    Phoneme: PAnsiChar;
+    StartTs: cfloat;
+    EndTs: cfloat;
+  end;
+
+  PSherpaOnnxTermAlignment = ^SherpaOnnxTermAlignment;
+  TSherpaOnnxTermAlignmentArray = array[0..(MaxInt div 24) - 1] of SherpaOnnxTermAlignment;
+  PSherpaOnnxTermAlignmentArray = ^TSherpaOnnxTermAlignmentArray;
+
   SherpaOnnxGeneratedAudio = record
     Samples: pcfloat;
     N: cint32;
     SampleRate: cint32;
+    TermAlignments: PSherpaOnnxTermAlignment;
+    NumTermAlignments: cint32;
   end;
 
   PSherpaOnnxGeneratedAudio = ^SherpaOnnxGeneratedAudio;
@@ -3055,6 +3076,9 @@ begin
 end;
 
 function ExtractGeneratedAudio(Audio: PSherpaOnnxGeneratedAudio): TSherpaOnnxGeneratedAudio;
+var
+  I: Integer;
+  Alignments: PSherpaOnnxTermAlignmentArray;
 begin
   Result := Default(TSherpaOnnxGeneratedAudio);
 
@@ -3066,6 +3090,19 @@ begin
 
   if Audio^.N > 0 then
     Move(Audio^.Samples[0], Result.Samples[0], Audio^.N * SizeOf(Single));
+
+  if Audio^.TermAlignments <> nil then
+  begin
+    SetLength(Result.TermAlignments, Audio^.NumTermAlignments);
+    Alignments := PSherpaOnnxTermAlignmentArray(Audio^.TermAlignments);
+    for I := 0 to Audio^.NumTermAlignments - 1 do
+    begin
+      Result.TermAlignments[I].Text := AnsiString(Alignments^[I].Text);
+      Result.TermAlignments[I].Phoneme := AnsiString(Alignments^[I].Phoneme);
+      Result.TermAlignments[I].StartTs := Alignments^[I].StartTs;
+      Result.TermAlignments[I].EndTs := Alignments^[I].EndTs;
+    end;
+  end;
 
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(Audio);
 end;

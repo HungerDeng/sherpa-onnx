@@ -1,8 +1,8 @@
 function(download_espeak_ng_for_piper)
   include(FetchContent)
 
-  set(espeak_ng_URL  "https://github.com/csukuangfj/espeak-ng/archive/ed530aa113046142eb5115cf2fc9157854d0ffe1.zip")
-  set(espeak_ng_HASH "SHA256=e4e262cbe34f7fe21f91f1ba3397f2728e1f30eafbae7853f2b753a9ed13f0dd")
+  set(espeak_ng_URL  "https://github.com/HungerDeng/espeak-ng/archive/9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip")
+  set(espeak_ng_HASH "SHA256=55f3b0fec3ba05adfe27130a6176d9f424e052066e30e484cde64004a84c9680")
 
   set(BUILD_ESPEAK_NG_TESTS OFF CACHE BOOL "" FORCE)
   set(USE_ASYNC OFF CACHE BOOL "" FORCE)
@@ -20,11 +20,11 @@ function(download_espeak_ng_for_piper)
   # If you don't have access to the Internet,
   # please pre-download kaldi-decoder
   set(possible_file_locations
-    $ENV{HOME}/Downloads/espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip
-    ${CMAKE_SOURCE_DIR}/espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip
-    ${CMAKE_BINARY_DIR}/espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip
-    /tmp/espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip
-    /star-fj/fangjun/download/github/espeak-ng-ed530aa113046142eb5115cf2fc9157854d0ffe1.zip
+    $ENV{HOME}/Downloads/espeak-ng-9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip
+    ${CMAKE_SOURCE_DIR}/espeak-ng-9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip
+    ${CMAKE_BINARY_DIR}/espeak-ng-9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip
+    /tmp/espeak-ng-9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip
+    /star-fj/fangjun/download/github/espeak-ng-9adb88b2833cbd6b8071c20ac464895b1819f3ae.zip
   )
 
   foreach(f IN LISTS possible_file_locations)

@@ -287,6 +287,7 @@ list(APPEND sources
 if(SHERPA_ONNX_ENABLE_TTS)
   list(APPEND sources
     character-lexicon.cc
+    espeak-phonemizer.cc
     hifigan-vocoder.cc
     kokoro-multi-lang-lexicon.cc
     lexicon.cc

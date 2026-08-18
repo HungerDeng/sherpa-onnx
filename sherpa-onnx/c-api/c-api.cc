@@ -1645,6 +1645,41 @@ int32_t SherpaOnnxOfflineTtsNumSpeakers(const SherpaOnnxOfflineTts *tts) {
   return tts->impl->NumSpeakers();
 }
 
+static char *SherpaOnnxCopyString(const std::string &s) {
+  char *ans = new char[s.size() + 1];
+  std::copy(s.begin(), s.end(), ans);
+  ans[s.size()] = '\0';
+  return ans;
+}
+
+static const SherpaOnnxGeneratedAudio *SherpaOnnxCreateGeneratedAudio(
+    const sherpa_onnx::GeneratedAudio &audio) {
+  auto *ans = new SherpaOnnxGeneratedAudio{};
+
+  float *samples = new float[audio.samples.size()];
+  std::copy(audio.samples.begin(), audio.samples.end(), samples);
+  ans->samples = samples;
+  ans->n = static_cast<int32_t>(audio.samples.size());
+  ans->sample_rate = audio.sample_rate;
+
+  if (audio.term_alignments && !audio.term_alignments->empty()) {
+    auto *alignments =
+        new SherpaOnnxTermAlignment[audio.term_alignments->size()]{};
+    for (size_t i = 0; i != audio.term_alignments->size(); ++i) {
+      const auto &src = (*audio.term_alignments)[i];
+      alignments[i].text = SherpaOnnxCopyString(src.text);
+      alignments[i].phoneme = SherpaOnnxCopyString(src.phoneme);
+      alignments[i].start_ts = src.start_ts;
+      alignments[i].end_ts = src.end_ts;
+    }
+    ans->term_alignments = alignments;
+    ans->num_term_alignments =
+        static_cast<int32_t>(audio.term_alignments->size());
+  }
+
+  return ans;
+}
+
 static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
     const SherpaOnnxOfflineTts *tts, const char *text, int32_t sid, float speed,
     std::function<int32_t(const float *, int32_t, float)> callback) {
@@ -1659,16 +1694,7 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
     return nullptr;
   }
 
-  SherpaOnnxGeneratedAudio *ans = new SherpaOnnxGeneratedAudio;
-
-  float *samples = new float[audio.samples.size()];
-  std::copy(audio.samples.begin(), audio.samples.end(), samples);
-
-  ans->samples = samples;
-  ans->n = audio.samples.size();
-  ans->sample_rate = audio.sample_rate;
-
-  return ans;
+  return SherpaOnnxCreateGeneratedAudio(audio);
 }
 
 static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
@@ -1716,16 +1742,7 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
     return nullptr;
   }
 
-  SherpaOnnxGeneratedAudio *ans = new SherpaOnnxGeneratedAudio;
-
-  float *samples = new float[audio.samples.size()];
-  std::copy(audio.samples.begin(), audio.samples.end(), samples);
-
-  ans->samples = samples;
-  ans->n = audio.samples.size();
-  ans->sample_rate = audio.sample_rate;
-
-  return ans;
+  return SherpaOnnxCreateGeneratedAudio(audio);
 }
 
 const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerate(
@@ -1893,15 +1910,7 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithZipvoice(
     return nullptr;
   }
 
-  auto *ans = new SherpaOnnxGeneratedAudio;
-  ans->sample_rate = static_cast<int32_t>(out.sample_rate);
-  ans->n = static_cast<int32_t>(out.samples.size());
-
-  float *buf = new float[out.samples.size()];
-  std::copy(out.samples.begin(), out.samples.end(), buf);
-  ans->samples = buf;
-
-  return ans;
+  return SherpaOnnxCreateGeneratedAudio(out);
 }
 
 const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithConfig(
@@ -1939,6 +1948,11 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithConfig(
 void SherpaOnnxDestroyOfflineTtsGeneratedAudio(
     const SherpaOnnxGeneratedAudio *p) {
   if (p) {
+    for (int32_t i = 0; i != p->num_term_alignments; ++i) {
+      delete[] p->term_alignments[i].text;
+      delete[] p->term_alignments[i].phoneme;
+    }
+    delete[] p->term_alignments;
     delete[] p->samples;
     delete p;
   }

@@ -57,7 +57,7 @@
 use crate::utils::to_c_ptr;
 use sherpa_onnx_sys as sys;
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::ptr;
 use std::slice;
@@ -444,6 +444,14 @@ pub struct GeneratedAudio {
     ptr: *const sys::SherpaOnnxGeneratedAudio,
 }
 
+#[derive(Clone, Debug)]
+pub struct TermAlignment {
+    pub text: String,
+    pub phoneme: String,
+    pub start_ts: f32,
+    pub end_ts: f32,
+}
+
 impl GeneratedAudio {
     /// Borrow generated samples.
     pub fn samples(&self) -> &[f32] {
@@ -463,6 +471,38 @@ impl GeneratedAudio {
     /// Return the output sample rate in Hz.
     pub fn sample_rate(&self) -> i32 {
         unsafe { (*self.ptr).sample_rate }
+    }
+
+    /// Return Kokoro v1.0+ frontend terms, or `None` when unavailable.
+    pub fn term_alignments(&self) -> Option<Vec<TermAlignment>> {
+        unsafe {
+            let p = &*self.ptr;
+            if p.term_alignments
+                .is_null()
+            {
+                return None;
+            }
+            let values = slice::from_raw_parts(
+                p.term_alignments,
+                p.num_term_alignments
+                    .max(0) as usize,
+            );
+            Some(
+                values
+                    .iter()
+                    .map(|a| TermAlignment {
+                        text: CStr::from_ptr(a.text)
+                            .to_string_lossy()
+                            .into_owned(),
+                        phoneme: CStr::from_ptr(a.phoneme)
+                            .to_string_lossy()
+                            .into_owned(),
+                        start_ts: a.start_ts,
+                        end_ts: a.end_ts,
+                    })
+                    .collect(),
+            )
+        }
     }
 
     /// Save generated audio to a WAV file.

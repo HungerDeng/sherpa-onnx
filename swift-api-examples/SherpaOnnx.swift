@@ -1243,6 +1243,13 @@ public class SherpaOnnxWaveWrapper {
   }
 }
 
+public struct SherpaOnnxTermAlignmentWrapper {
+  public let text: String
+  public let phoneme: String
+  public let startTs: Float
+  public let endTs: Float
+}
+
 public class SherpaOnnxGeneratedAudioWrapper {
   /// A pointer to the underlying counterpart in C
   public let audio: UnsafePointer<SherpaOnnxGeneratedAudio>!
@@ -1270,6 +1277,22 @@ public class SherpaOnnxGeneratedAudioWrapper {
       return [Float](UnsafeBufferPointer(start: p, count: Int(n)))
     } else {
       return []
+    }
+  }
+
+  /// Kokoro v1.0+ frontend terms, or nil when unavailable.
+  public var termAlignments: [SherpaOnnxTermAlignmentWrapper]? {
+    guard let p = audio.pointee.term_alignments else {
+      return nil
+    }
+
+    return (0..<Int(audio.pointee.num_term_alignments)).map { i in
+      let value = p[i]
+      return SherpaOnnxTermAlignmentWrapper(
+        text: String(cString: value.text),
+        phoneme: String(cString: value.phoneme),
+        startTs: value.start_ts,
+        endTs: value.end_ts)
     }
   }
 

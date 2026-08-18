@@ -121,8 +121,28 @@ class OfflineTts {
     final result = generateFn.callAsFunction(handle, text.toJS, genConfig) as JSObject;
     final samples = (result.getProperty('samples'.toJS) as JSFloat32Array).toDart;
     final sampleRate = (result.getProperty('sampleRate'.toJS) as JSNumber).toDartInt;
+    List<TermAlignment>? termAlignments;
+    final jsAlignments = result.getProperty('termAlignments'.toJS);
+    if (jsAlignments is JSArray) {
+      termAlignments = <TermAlignment>[];
+      for (final value in jsAlignments.toDart) {
+        final a = value as JSObject;
+        termAlignments.add(
+          TermAlignment(
+            text: (a.getProperty('text'.toJS) as JSString).toDart,
+            phoneme: (a.getProperty('phoneme'.toJS) as JSString).toDart,
+            startTs: (a.getProperty('startTs'.toJS) as JSNumber).toDartDouble,
+            endTs: (a.getProperty('endTs'.toJS) as JSNumber).toDartDouble,
+          ),
+        );
+      }
+    }
 
-    return GeneratedAudio(samples: samples, sampleRate: sampleRate);
+    return GeneratedAudio(
+      samples: samples,
+      sampleRate: sampleRate,
+      termAlignments: termAlignments,
+    );
   }
 
   int get sampleRate {

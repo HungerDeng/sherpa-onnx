@@ -35,6 +35,17 @@ struct TokenIDs {
   std::vector<int64_t> tones;
 };
 
+struct Term {
+  std::string text;
+  std::string phoneme;
+  TokenIDs token_ids;
+};
+
+struct SplitSentence {
+  TokenIDs token_ids;
+  std::vector<Term> terms;
+};
+
 class OfflineTtsFrontend {
  public:
   virtual ~OfflineTtsFrontend() = default;
@@ -53,6 +64,15 @@ class OfflineTtsFrontend {
    */
   virtual std::vector<TokenIDs> ConvertTextToTokenIds(
       const std::string &text, const std::string &voice = "") const = 0;
+
+  /** Convert text to independently processable sentences with frontend terms.
+   *
+   * Only the Kokoro v1.0+ frontend provides this richer representation.
+   */
+  virtual std::vector<SplitSentence> ConvertTextToSplitSentences(
+      const std::string &text, const std::string &voice = "") const {
+    return {};
+  }
 };
 
 // implementation is in ./piper-phonemize-lexicon.cc

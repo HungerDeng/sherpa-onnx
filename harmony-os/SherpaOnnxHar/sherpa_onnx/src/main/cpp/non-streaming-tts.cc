@@ -526,6 +526,26 @@ static Napi::Number OfflineTtsNumSpeakersWrapper(
   return Napi::Number::New(env, num_speakers);
 }
 
+static void SetTermAlignments(Napi::Env env, Napi::Object *result,
+                              const SherpaOnnxGeneratedAudio *audio) {
+  if (!audio->term_alignments) {
+    result->Set("termAlignments", env.Null());
+    return;
+  }
+
+  Napi::Array values = Napi::Array::New(env, audio->num_term_alignments);
+  for (int32_t i = 0; i != audio->num_term_alignments; ++i) {
+    const auto &src = audio->term_alignments[i];
+    Napi::Object value = Napi::Object::New(env);
+    value.Set("text", src.text);
+    value.Set("phoneme", src.phoneme);
+    value.Set("startTs", src.start_ts);
+    value.Set("endTs", src.end_ts);
+    values.Set(i, value);
+  }
+  result->Set("termAlignments", values);
+}
+
 // synchronous version
 static Napi::Object OfflineTtsGenerateWithConfigWrapper(
     const Napi::CallbackInfo &info) {
@@ -589,6 +609,7 @@ static Napi::Object OfflineTtsGenerateWithConfigWrapper(
 
   Napi::Object result = Napi::Object::New(env);
   int32_t sample_rate = audio->sample_rate;
+  SetTermAlignments(env, &result, audio);
 
   if (enable_external_buffer) {
     Napi::ArrayBuffer buffer = Napi::ArrayBuffer::New(
@@ -723,6 +744,7 @@ static Napi::Object OfflineTtsGenerateWrapper(const Napi::CallbackInfo &info) {
     Napi::Object ans = Napi::Object::New(env);
     ans.Set(Napi::String::New(env, "samples"), float32Array);
     ans.Set(Napi::String::New(env, "sampleRate"), audio->sample_rate);
+    SetTermAlignments(env, &ans, audio);
     return ans;
   } else {
     // don't use external buffer
@@ -737,6 +759,7 @@ static Napi::Object OfflineTtsGenerateWrapper(const Napi::CallbackInfo &info) {
     Napi::Object ans = Napi::Object::New(env);
     ans.Set(Napi::String::New(env, "samples"), float32Array);
     ans.Set(Napi::String::New(env, "sampleRate"), audio->sample_rate);
+    SetTermAlignments(env, &ans, audio);
     SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
     return ans;
   }
@@ -798,6 +821,7 @@ static void SettleIfReady(Napi::Env env,
   }
 
   Napi::Object ans = Napi::Object::New(env);
+  SetTermAlignments(env, &ans, state->audio);
   if (state->use_external_buffer) {
     const SherpaOnnxGeneratedAudio *audio = state->audio;
     Napi::ArrayBuffer arrayBuffer = Napi::ArrayBuffer::New(
