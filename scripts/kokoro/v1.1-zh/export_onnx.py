@@ -40,10 +40,11 @@ def main():
         (x, style, speed),
         "kokoro.onnx",
         input_names=["tokens", "style", "speed"],
-        output_names=["audio"],
+        output_names=["audio", "pred_dur"],
         dynamic_axes={
             "tokens": {1: "sequence_length"},
             "audio": {0: "audio_length"},
+            "pred_dur": {0: "sequence_length"},
         },
         opset_version=14,  # minimum working version for this kokoro model is 14
     )
