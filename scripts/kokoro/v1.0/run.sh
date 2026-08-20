@@ -3,7 +3,14 @@
 
 set -ex
 
-git clone https://huggingface.co/hexgrad/Kokoro-82M
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$script_dir"
+
+output_dir=./kokoro-multi-lang-v1_0
+
+if [ ! -d ./Kokoro-82M ]; then
+  git clone https://huggingface.co/hexgrad/Kokoro-82M
+fi
 
 # https://huggingface.co/hexgrad/Kokoro-82M/tree/main/voices
 #
@@ -59,4 +66,28 @@ if [ ! -f ./voices.bin ]; then
 fi
 
 ./test.py
-ls -lh
+
+# Package the generated model artifacts together with the complete eSpeak NG
+# runtime data required by sherpa-onnx. The CMake build's data directory only
+# contains language assets; piper_phonemize ships the compiled phontab and
+# related files that the runtime validates.
+mkdir -p "$output_dir/espeak-ng-data"
+cp -a \
+  .venv/lib/python3.12/site-packages/piper_phonemize/espeak-ng-data/. \
+  "$output_dir/espeak-ng-data/"
+
+for generated_file in \
+  kokoro.onnx \
+  kokoro.int8.onnx \
+  tokens.txt \
+  lexicon-zh.txt \
+  lexicon-us-en.txt \
+  lexicon-gb-en.txt \
+  voices.bin \
+  kokoro_*.wav; do
+  if [ -e "$generated_file" ]; then
+    mv -v "$generated_file" "$output_dir/"
+  fi
+done
+
+ls -lh "$output_dir"
