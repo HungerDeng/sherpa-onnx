@@ -39,6 +39,10 @@ struct Term {
   std::string text;
   std::string phoneme;
   TokenIDs token_ids;
+
+  // Number of leading token IDs represented by phoneme. Any remaining token
+  // IDs are model-only suffixes, such as the space following an espeak word.
+  int32_t num_phoneme_tokens = 0;
 };
 
 struct SplitSentence {

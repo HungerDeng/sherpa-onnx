@@ -14,6 +14,11 @@
 
 namespace sherpa_onnx {
 
+struct OfflineTtsKokoroModelOutput {
+  Ort::Value audio{nullptr};
+  Ort::Value pred_dur{nullptr};
+};
+
 class OfflineTtsKokoroModel {
  public:
   ~OfflineTtsKokoroModel();
@@ -23,9 +28,10 @@ class OfflineTtsKokoroModel {
   template <typename Manager>
   OfflineTtsKokoroModel(Manager *mgr, const OfflineTtsModelConfig &config);
 
-  // Return a float32 tensor containing the samples
-  // of shape (batch_size, num_samples)
-  Ort::Value Run(Ort::Value x, int64_t sid = 0, float speed = 1.0) const;
+  // audio is a float32 tensor containing the samples of shape (batch_size, num_samples). 
+  // Kokoro v1.0+ also returns pred_dur, an int64 tensor parallel to the input token sequence.
+  OfflineTtsKokoroModelOutput Run(Ort::Value x, int64_t sid = 0,
+                                  float speed = 1.0) const;
 
   const OfflineTtsKokoroModelMetaData &GetMetaData() const;
 

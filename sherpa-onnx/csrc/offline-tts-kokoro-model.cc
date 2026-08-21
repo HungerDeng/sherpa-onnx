@@ -56,7 +56,7 @@ class OfflineTtsKokoroModel::Impl {
     return meta_data_;
   }
 
-  Ort::Value Run(Ort::Value x, int32_t sid, float speed) {
+  OfflineTtsKokoroModelOutput Run(Ort::Value x, int32_t sid, float speed) {
     auto memory_info =
         Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
 
@@ -99,7 +99,12 @@ class OfflineTtsKokoroModel::Impl {
         sess_->Run({}, input_names_ptr_.data(), inputs.data(), inputs.size(),
                    output_names_ptr_.data(), output_names_ptr_.size());
 
-    return std::move(out[0]);
+    OfflineTtsKokoroModelOutput ans;
+    ans.audio = std::move(out[audio_output_index_]);
+    if (pred_dur_output_index_ >= 0) {
+      ans.pred_dur = std::move(out[pred_dur_output_index_]);
+    }
+    return ans;
   }
 
  private:
@@ -152,6 +157,39 @@ class OfflineTtsKokoroModel::Impl {
     SHERPA_ONNX_READ_META_DATA(meta_data_.has_espeak, "has_espeak");
     SHERPA_ONNX_READ_META_DATA_STR_WITH_DEFAULT(meta_data_.voice, "voice",
                                                 "en-us");
+
+    auto audio_iter =
+        std::find(output_names_.begin(), output_names_.end(), "audio");
+    if (audio_iter != output_names_.end()) {
+      audio_output_index_ =
+          static_cast<int32_t>(audio_iter - output_names_.begin());
+    }
+
+    if (meta_data_.version >= 2) {
+      auto pred_dur_iter =
+          std::find(output_names_.begin(), output_names_.end(), "pred_dur");
+      if (pred_dur_iter == output_names_.end()) {
+        SHERPA_ONNX_LOGE(
+            "Kokoro v1.0+ models must expose an int64 output named "
+            "'pred_dur'. Please rebuild the model with the current "
+            "scripts/kokoro export script.");
+        SHERPA_ONNX_EXIT(-1);
+      }
+
+      pred_dur_output_index_ =
+          static_cast<int32_t>(pred_dur_iter - output_names_.begin());
+      // TensorTypeAndShapeInfo is an unowned view into TypeInfo, so keep the
+      // owning TypeInfo alive while validating the output contract.
+      auto pred_dur_type_info =
+          sess_->GetOutputTypeInfo(pred_dur_output_index_);
+      auto pred_dur_info = pred_dur_type_info.GetTensorTypeAndShapeInfo();
+      if (pred_dur_info.GetElementType() !=
+              ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64 ||
+          pred_dur_info.GetShape().size() != 1) {
+        SHERPA_ONNX_LOGE("Kokoro output 'pred_dur' must be a 1-D int64 tensor");
+        SHERPA_ONNX_EXIT(-1);
+      }
+    }
 
     if (config_.debug) {
       std::vector<std::string> speaker_names;
@@ -223,6 +261,8 @@ class OfflineTtsKokoroModel::Impl {
 
   std::vector<std::string> output_names_;
   std::vector<const char *> output_names_ptr_;
+  int32_t audio_output_index_ = 0;
+  int32_t pred_dur_output_index_ = -1;
 
   OfflineTtsKokoroModelMetaData meta_data_;
   std::vector<int32_t> style_dim_;
@@ -247,8 +287,8 @@ const OfflineTtsKokoroModelMetaData &OfflineTtsKokoroModel::GetMetaData()
   return impl_->GetMetaData();
 }
 
-Ort::Value OfflineTtsKokoroModel::Run(Ort::Value x, int64_t sid /*= 0*/,
-                                      float speed /*= 1.0*/) const {
+OfflineTtsKokoroModelOutput OfflineTtsKokoroModel::Run(
+    Ort::Value x, int64_t sid /*= 0*/, float speed /*= 1.0*/) const {
   return impl_->Run(std::move(x), sid, speed);
 }
 

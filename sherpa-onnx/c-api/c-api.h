@@ -2477,9 +2477,9 @@ typedef struct SherpaOnnxTermAlignment {
   const char *text;
   /** Kokoro phoneme symbols assigned to this term. */
   const char *phoneme;
-  /** Start time in seconds. Currently -1 because timing is unavailable. */
+  /** Start time in seconds, or -1 for an unpronounced term. */
   float start_ts;
-  /** End time in seconds. Currently -1 because timing is unavailable. */
+  /** End time in seconds, or -1 for an unpronounced term. */
   float end_ts;
 } SherpaOnnxTermAlignment;
 
