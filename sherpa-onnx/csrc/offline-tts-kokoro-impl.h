@@ -4,9 +4,12 @@
 #ifndef SHERPA_ONNX_CSRC_OFFLINE_TTS_KOKORO_IMPL_H_
 #define SHERPA_ONNX_CSRC_OFFLINE_TTS_KOKORO_IMPL_H_
 
+#include <algorithm>
+#include <array>
 #include <iomanip>
 #include <ios>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <sstream>
 #include <utility>
@@ -268,15 +271,15 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
       return {};
     }
 
-    std::vector<std::vector<int64_t>> x;
+    std::vector<std::vector<int64_t>> sentence_tokens;
 
-    x.reserve(token_ids.size());
+    sentence_tokens.reserve(token_ids.size());
 
     for (auto &i : token_ids) {
-      x.push_back(std::move(i.tokens));
+      sentence_tokens.push_back(std::move(i.tokens));
     }
 
-    int32_t x_size = static_cast<int32_t>(x.size());
+    int32_t num_sentences = static_cast<int32_t>(sentence_tokens.size());
 
     if (config_.max_num_sentences != 1) {
 #if __OHOS__
@@ -291,25 +294,21 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
 #endif
     }
 
-    // the input text is too long, we process sentences within it in batches
-    // to avoid OOM. Batch size is config_.max_num_sentences
-    std::vector<std::vector<int64_t>> batch_x;
-
-    int32_t batch_size = 1;
-    batch_x.reserve(config_.max_num_sentences);
-    int32_t num_batches = x_size / batch_size;
+    // Kokoro returns one pred_dur sequence for one ONNX token sequence. Process
+    // each split sentence independently so its durations map unambiguously to
+    // the terms in the SplitSentence at the same index.
+    // So we don't need batch related logic, including batch_x, batch_size, num_batchs, etc.
 
     if (config_.model.debug) {
 #if __OHOS__
       SHERPA_ONNX_LOGE(
-          "Split it into %{public}d batches. batch size: "
-          "%{public}d. Number of sentences: %{public}d",
-          num_batches, batch_size, x_size);
+          "Process %{public}d sentences with one Kokoro model call per "
+          "sentence",
+          num_sentences);
 #else
       SHERPA_ONNX_LOGE(
-          "Split it into %d batches. batch size: %d. Number "
-          "of sentences: %d",
-          num_batches, batch_size, x_size);
+          "Process %d sentences with one Kokoro model call per sentence",
+          num_sentences);
 #endif
     }
 
@@ -319,61 +318,57 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
       ans.term_alignments.emplace();
     }
 
-    auto append_term_alignments = [&](int32_t sentence_index) {
-      if (!ans.term_alignments ||
-          sentence_index >= static_cast<int32_t>(split_sentences.size())) {
-        return;
-      }
-      for (const auto &term : split_sentences[sentence_index].terms) {
-        ans.term_alignments->push_back(
-            {term.text, term.phoneme, -1.0f, -1.0f});
-      }
-    };
-
     int32_t should_continue = 1;
 
-    int32_t k = 0;
+    float silence_scale = gen_config.silence_scale;
+    if (silence_scale == 0.2f) {
+      silence_scale = config_.silence_scale;
+    }
 
-    for (int32_t b = 0; b != num_batches && should_continue; ++b) {
-      batch_x.clear();
-      for (int32_t i = 0; i != batch_size; ++i, ++k) {
-        batch_x.push_back(std::move(x[k]));
+    for (int32_t sentence_index = 0;
+         sentence_index != num_sentences && should_continue;
+         ++sentence_index) {
+      auto result =
+          Process(std::move(sentence_tokens[sentence_index]), sid, speed);
+      auto audio = std::move(result.audio);
+
+      if (ans.term_alignments) {
+        // Infer sentence-local timestamps before ScaleSilence so it can map
+        // the boundaries through the same removed or inserted silence.
+        auto term_alignments = InferTermAlignments(
+            split_sentences[sentence_index], result.pred_dur);
+        audio.term_alignments = std::move(term_alignments);
       }
 
-      auto audio =
-          Process(batch_x, sid, speed, gen_config.silence_scale);
+      if (silence_scale != 1) {
+        audio = audio.ScaleSilence(silence_scale);
+      }
+
+      // ans already contains every preceding sentence. Its current duration
+      // is therefore this sentence's offset in the returned waveform.
+      float sentence_offset =
+          ans.samples.size() / static_cast<float>(audio.sample_rate);
+      if (ans.term_alignments && audio.term_alignments) {
+        for (auto &alignment : *audio.term_alignments) {
+          if (alignment.start_ts >= 0) {
+            alignment.start_ts += sentence_offset;
+          }
+          if (alignment.end_ts >= 0) {
+            alignment.end_ts += sentence_offset;
+          }
+          ans.term_alignments->push_back(std::move(alignment));
+        }
+      }
+
+      // Append the adjusted sentence to the complete utterance. Keep audio's
+      // samples intact because the callback below receives this sentence only.
       ans.sample_rate = audio.sample_rate;
       ans.samples.insert(ans.samples.end(), audio.samples.begin(),
                          audio.samples.end());
-      append_term_alignments(k - 1);
+
       if (callback) {
         should_continue = callback(audio.samples.data(), audio.samples.size(),
-                                   (b + 1) * 1.0 / num_batches);
-        // Caution(fangjun): audio is freed when the callback returns, so users
-        // should copy the data if they want to access the data after
-        // the callback returns to avoid segmentation fault.
-      }
-    }
-
-    batch_x.clear();
-    while (k < static_cast<int32_t>(x.size()) && should_continue) {
-      batch_x.push_back(std::move(x[k]));
-
-      ++k;
-    }
-
-    if (!batch_x.empty()) {
-      int32_t first_sentence = k - static_cast<int32_t>(batch_x.size());
-      auto audio =
-          Process(batch_x, sid, speed, gen_config.silence_scale);
-      ans.sample_rate = audio.sample_rate;
-      ans.samples.insert(ans.samples.end(), audio.samples.begin(),
-                         audio.samples.end());
-      for (int32_t i = 0; i != static_cast<int32_t>(batch_x.size()); ++i) {
-        append_term_alignments(first_sentence + i);
-      }
-      if (callback) {
-        callback(audio.samples.data(), audio.samples.size(), 1.0);
+                                   (sentence_index + 1) * 1.0 / num_sentences);
         // Caution(fangjun): audio is freed when the callback returns, so users
         // should copy the data if they want to access the data after
         // the callback returns to avoid segmentation fault.
@@ -451,28 +446,104 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
         config_.model.kokoro.tokens, config_.model.kokoro.data_dir, meta_data);
   }
 
-  GeneratedAudio Process(const std::vector<std::vector<int64_t>> &tokens,
-                         int32_t sid, float speed,
-                         float silence_scale) const {
-    int32_t num_tokens = 0;
-    for (const auto &k : tokens) {
-      num_tokens += k.size();
+  struct ProcessResult {
+    GeneratedAudio audio;
+    std::vector<int64_t> pred_dur;
+  };
+
+  static std::vector<TermAlignment> InferTermAlignments(
+      const SplitSentence &sentence, const std::vector<int64_t> &pred_dur) {
+    size_t num_term_tokens = 0;
+    for (const auto &term : sentence.terms) {
+      if (term.num_phoneme_tokens < 0 ||
+          static_cast<size_t>(term.num_phoneme_tokens) >
+              term.token_ids.tokens.size()) {
+        SHERPA_ONNX_LOGE(
+            "Invalid Kokoro term token span for '%s': %d phoneme tokens, "
+            "%d total tokens",
+            term.text.c_str(), term.num_phoneme_tokens,
+            static_cast<int32_t>(term.token_ids.tokens.size()));
+        SHERPA_ONNX_EXIT(-1);
+      }
+      num_term_tokens += term.token_ids.tokens.size();
     }
 
-    std::vector<int64_t> x;
-    x.reserve(num_tokens);
-    for (const auto &k : tokens) {
-      x.insert(x.end(), k.begin(), k.end());
+    if (sentence.token_ids.tokens.size() != num_term_tokens + 2 ||
+        pred_dur.size() != sentence.token_ids.tokens.size()) {
+      SHERPA_ONNX_LOGE(
+          "Invalid Kokoro duration alignment: sentence has %d token IDs, "
+          "terms cover %d token IDs, and pred_dur has %d entries",
+          static_cast<int32_t>(sentence.token_ids.tokens.size()),
+          static_cast<int32_t>(num_term_tokens),
+          static_cast<int32_t>(pred_dur.size()));
+      SHERPA_ONNX_EXIT(-1);
     }
 
+    std::vector<TermAlignment> ans;
+    ans.reserve(sentence.terms.size());
+
+    // This is KPipeline::join_timestamps expressed in half-frames. Kokoro
+    // emits 600 samples per duration frame at 24 kHz, so dividing half-frames
+    // by 80 produces seconds. Tracking both edges lets a separator's duration
+    // be split evenly between the terms on either side.
+    constexpr float kMagicDivisor = 80.0f;
+    int64_t left = 2 * std::max<int64_t>(0, pred_dur[0] - 3);
+    int64_t right = left;
+    size_t token_index = 1;  // Skip BOS.
+
+    for (const auto &term : sentence.terms) {
+      size_t phoneme_end =
+          token_index + static_cast<size_t>(term.num_phoneme_tokens);
+      size_t term_end = token_index + term.token_ids.tokens.size();
+      int64_t phoneme_duration =
+          std::accumulate(pred_dur.begin() + token_index,
+                          pred_dur.begin() + phoneme_end, int64_t{0});
+      int64_t suffix_duration =
+          std::accumulate(pred_dur.begin() + phoneme_end,
+                          pred_dur.begin() + term_end, int64_t{0});
+
+      TermAlignment alignment{term.text, term.phoneme, -1.0f, -1.0f};
+      if (term.num_phoneme_tokens != 0) {
+        alignment.start_ts = left / kMagicDivisor;
+        left = right + 2 * phoneme_duration + suffix_duration;
+        alignment.end_ts = left / kMagicDivisor;
+        right = left + suffix_duration;
+      } else {
+        // Match KPipeline's handling of an unpronounced token: leave its
+        // timestamps unset but consume its model-only separator duration.
+        left = right + suffix_duration;
+        right = left + suffix_duration;
+      }
+
+      ans.push_back(std::move(alignment));
+      token_index = term_end;
+    }
+
+    if (token_index + 1 != pred_dur.size()) {
+      SHERPA_ONNX_LOGE(
+          "Invalid Kokoro duration alignment: consumed %d of %d token "
+          "durations before EOS",
+          static_cast<int32_t>(token_index),
+          static_cast<int32_t>(pred_dur.size() - 1));
+      SHERPA_ONNX_EXIT(-1);
+    }
+
+    return ans;
+  }
+
+  ProcessResult Process(std::vector<int64_t> model_tokens, int32_t sid,
+                        float speed) const {
     auto memory_info =
         Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
 
-    std::array<int64_t, 2> x_shape = {1, static_cast<int32_t>(x.size())};
-    Ort::Value x_tensor = Ort::Value::CreateTensor(
-        memory_info, x.data(), x.size(), x_shape.data(), x_shape.size());
+    std::array<int64_t, 2> model_input_shape = {
+        1, static_cast<int32_t>(model_tokens.size())};
+    Ort::Value model_input = Ort::Value::CreateTensor(
+        memory_info, model_tokens.data(), model_tokens.size(),
+        model_input_shape.data(), model_input_shape.size());
 
-    Ort::Value audio = model_->Run(std::move(x_tensor), sid, speed);
+    auto model_output = model_->Run(std::move(model_input), sid, speed);
+    auto &audio = model_output.audio;
 
     std::vector<int64_t> audio_shape =
         audio.GetTensorTypeAndShapeInfo().GetShape();
@@ -485,16 +556,15 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
 
     const float *p = audio.GetTensorData<float>();
 
-    GeneratedAudio ans;
-    ans.sample_rate = model_->GetMetaData().sample_rate;
-    ans.samples = std::vector<float>(p, p + total);
+    ProcessResult ans;
+    ans.audio.sample_rate = model_->GetMetaData().sample_rate;
+    ans.audio.samples = std::vector<float>(p, p + total);
 
-    if (silence_scale == 0.2f) {
-      silence_scale = config_.silence_scale;
-    }
-
-    if (silence_scale != 1) {
-      ans = ans.ScaleSilence(silence_scale);
+    if (model_->GetMetaData().version >= 2) {
+      auto pred_dur_info = model_output.pred_dur.GetTensorTypeAndShapeInfo();
+      size_t num_durations = pred_dur_info.GetElementCount();
+      const int64_t *durations = model_output.pred_dur.GetTensorData<int64_t>();
+      ans.pred_dur.assign(durations, durations + num_durations);
     }
 
     return ans;

@@ -388,7 +388,15 @@ class KokoroMultiLangLexicon::Impl {
         fragment.text = term.text;
         fragment.token_ids.tokens.assign(ids.begin() + begin,
                                          ids.begin() + end);
-        fragment.phoneme = IdsToPhoneme(fragment.token_ids.tokens);
+        size_t phoneme_begin =
+            std::min(begin, static_cast<size_t>(term.num_phoneme_tokens));
+        size_t phoneme_end =
+            std::min(end, static_cast<size_t>(term.num_phoneme_tokens));
+        fragment.num_phoneme_tokens =
+            static_cast<int32_t>(phoneme_end - phoneme_begin);
+        fragment.phoneme = IdsToPhoneme(std::vector<int64_t>(
+            fragment.token_ids.tokens.begin(),
+            fragment.token_ids.tokens.begin() + fragment.num_phoneme_tokens));
         ans.push_back(MakeSentence({std::move(fragment)}));
         begin = end;
       }
@@ -419,6 +427,7 @@ class KokoroMultiLangLexicon::Impl {
 
     auto phoneme_ids = TokenizePhonemes(g2p_term.phoneme, term.text);
     term.phoneme = IdsToPhoneme(phoneme_ids);
+    term.num_phoneme_tokens = static_cast<int32_t>(phoneme_ids.size());
 
     // Tokenize recovered punctuation too. Written input such as
     // "record. doesn't" therefore reaches Kokoro as "record . doesn't"

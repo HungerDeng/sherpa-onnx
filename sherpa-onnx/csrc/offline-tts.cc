@@ -92,6 +92,8 @@ GeneratedAudio GeneratedAudio::ScaleSilence(float scale) const {
   ans.sample_rate = sample_rate;
   ans.term_alignments = term_alignments;
   ans.samples.reserve(samples.size());
+  std::vector<int32_t> scaled_interval_lengths;
+  scaled_interval_lengths.reserve(intervals.size());
 
   i = 0;
   for (const auto &interval : intervals) {
@@ -100,6 +102,7 @@ GeneratedAudio GeneratedAudio::ScaleSilence(float scale) const {
     i = interval.end;
     int32_t len = interval.end - interval.start;
     int32_t n = static_cast<int32_t>(len * scale);
+    scaled_interval_lengths.push_back(n);
 
     if (n <= len) {
       ans.samples.insert(ans.samples.end(), samples.begin() + interval.start,
@@ -117,6 +120,44 @@ GeneratedAudio GeneratedAudio::ScaleSilence(float scale) const {
 
   if (i < num_samples) {
     ans.samples.insert(ans.samples.end(), samples.begin() + i, samples.end());
+  }
+
+  if (ans.term_alignments) {
+    auto map_timestamp = [&](float timestamp) -> float {
+      if (timestamp < 0) {
+        return timestamp;
+      }
+
+      double sample_position = timestamp * sample_rate;
+      int64_t sample_shift = 0;
+      for (size_t interval_index = 0; interval_index != intervals.size();
+           ++interval_index) {
+        const auto &interval = intervals[interval_index];
+        int32_t old_length = interval.end - interval.start;
+        int32_t new_length = scaled_interval_lengths[interval_index];
+
+        if (sample_position <= interval.start) {
+          break;
+        }
+
+        if (sample_position < interval.end) {
+          double relative_position = sample_position - interval.start;
+          double mapped_position = interval.start + sample_shift +
+                                   relative_position * new_length / old_length;
+          return static_cast<float>(mapped_position / sample_rate);
+        }
+
+        sample_shift +=
+            static_cast<int64_t>(new_length) - static_cast<int64_t>(old_length);
+      }
+
+      return static_cast<float>((sample_position + sample_shift) / sample_rate);
+    };
+
+    for (auto &alignment : *ans.term_alignments) {
+      alignment.start_ts = map_timestamp(alignment.start_ts);
+      alignment.end_ts = map_timestamp(alignment.end_ts);
+    }
   }
 
   return ans;
