@@ -22,7 +22,7 @@ sequenceDiagram
   end
   box rgb(224,240,220) Speech frontend (kokoro-multi-lang-lexicon.cc)
     participant FE as KokoroMultiLangLexicon (kokoro-multi-lang-lexicon.cc)
-    participant NORM as Normalizer (punctuation · whitespace)
+    participant NORM as Punctuation router
     participant ROUTE as Chinese / non-Chinese splitter
     participant ZH as Chinese path (PhraseMatcher · lexicon-zh.txt)
     participant EN as Non-Chinese path (en / gb lexicon)
@@ -38,7 +38,7 @@ sequenceDiagram
   IMPL->>FE: ConvertTextToTokenIds(text, lang)
   FE->>NORM: written text: 来听一听，这个是什么口音？How are you doing？Are you ok？Thank you！你觉得中英文说得如何呢？
   Note over NORM,ESP: example values are illustrative · simplified token IDs
-  NORM->>ROUTE: normalized: 来听一听, 这个是什么口音? How are you doing? Are you ok? Thank you! 你觉得中英文说得如何呢?
+  NORM->>ROUTE: partitioned, written text preserved: 来听一听，这个是什么口音？How are you doing？Are you ok？Thank you！你觉得中英文说得如何呢？
   ROUTE->>ZH: Chinese runs (一-龥): 来听一听 · 这个是什么口音 · 你觉得中英文说得如何呢
   ZH->>ZH: SplitUtf8 · PhraseMatcher(all_words_) · ConvertWordToIds
   ZH->>FE: lexicon-zh lookup: 来听一听 → l ai2 t ing1 t ing1 · BOS/EOS = 0
@@ -66,8 +66,8 @@ sequenceDiagram
 
 1. **Entry** — `OfflineTtsKokoroImpl::Generate` resolves `lang` (`gen_config.extra["lang"]` → `config_.model.kokoro.lang` → `meta_data.voice`, which is `en-us` for the exported v1.0 model) and calls `frontend_->ConvertTextToTokenIds(text, lang)`.
 2. **Context before the call — FST normalization** — if rule FSTs are configured (`date-zh.fst`, `phone-zh.fst`, `number-zh.fst`), `Generate` runs each of them in order via `kaldifst::TextNormalizer::Normalize` before the frontend. The normalizer converts the input string into a linear FST, composes it with the rule FST (`fst::Compose`), takes the best path (`fst::ShortestPath`), and writes back the output labels (dropping zero-padding bytes). The rule FSTs are string-rewriting transducers: `number-zh.fst` expands digits to their spoken Chinese reading (illustrative: `123` → `一百二十三`), `date-zh.fst` expands dates (illustrative: `2026年8月13日` → `二零二六年八月十三日`), and `phone-zh.fst` handles phone numbers. Anything a rule does not cover passes through unchanged — which is why the two example texts below, containing no digits, dates, or phone numbers, are unchanged by this step.
-3. **Punctuation normalization** — `ConvertTextToTokenIds` maps full-width/Chinese punctuation (，、；：。？！) to ASCII and merges whitespace runs.
-4. **Language routing** — the text is split into Chinese runs (`[一-龥]+`) and non-Chinese runs.
+3. **Punctuation handling** — `ConvertTextToTokenIds` keeps each mapped full-width/CJK punctuation codepoint as an independent, language-neutral chunk and converts only its phoneme to a supported Kokoro symbol. Paired CJK marks map to directional quotes, `・` maps to space, and full-width `－` maps to `—`. General-purpose `-`, `–`, `—`, and `…` remain in non-Chinese text so eSpeak retains their surrounding context. A punctuation-only run naturally isolated between Chinese chunks, such as `……`, still maps directly to its two supported punctuation tokens. Chunking preserves all original whitespace exactly.
+4. **Language routing** — the text is split into Chinese runs (`[一-龥]+`), non-Chinese runs, and language-neutral punctuation chunks.
 5. **Chinese path** — `ConvertChineseToTokenIDs` first splits the run into one UTF-8 character per element via `SplitUtf8`. For `中國人民不信邪也不怕邪` that yields `["中", "國", "人", "民", "不", "信", "邪", "也", "不", "怕", "邪"]`. It then runs `PhraseMatcher(&all_words_, words, ...)` (max search length 10), which greedily groups adjacent characters into the **longest** lexicon phrase found, falling back to a single character when nothing matches. If `lexicon-zh.txt` contains `中國人民`, `不信邪`, and `不怕邪`, the grouping is `"中國人民" → "不信邪" → "也" → "不怕邪"`. Each grouped phrase then resolves via `ConvertWordToIds` against `word2ids_` (populated from `lexicon-zh.txt`); unmatched characters are skipped as OOV.
 6. **Non-Chinese path** — `ConvertNonChineseToTokenIDs`:
    - voice non-empty (shipped default `en-us`) → `ConvertTextToTokenIDsWithEspeak`, which calls `ConvertTextToTokenIdsKokoroOrKitten` (espeak-ng phonemize → Kokoro phoneme → token IDs, chunked by `max_token_len`);
@@ -95,8 +95,8 @@ All phoneme and token-ID values below are illustrative (simplified); the real ou
 |---|---|---|
 | input (written text) | 中國人民不信邪也不怕邪，不惹事也不怕事，任何外國不要指望我們會拿自己的核心利益做交易，不要指望我們會吞下損害我國主權、安全、發展利益的苦果！ | The sky above the port was the color of television, tuned to a dead channel. |
 | 2 · FST normalization | unchanged (no digits / dates / phone numbers) | unchanged |
-| 3 · punctuation normalization | 中國人民不信邪也不怕邪,不惹事也不怕事,任何外國不要指望我們會拿自己的核心利益做交易,不要指望我們會吞下損害我國主權,安全,發展利益的苦果! | unchanged (already ASCII; whitespace runs merged) |
-| 4 · language routing | Chinese runs: 中國人民不信邪也不怕邪 · 不惹事也不怕事 · 任何外國不要指望我們會拿自己的核心利益做交易 · 不要指望我們會吞下損害我國主權 · 安全 · 發展利益的苦果 (punctuation tokens go to the non-Chinese path) | one non-Chinese run: The sky above the port was the color of television, tuned to a dead channel. |
+| 3 · punctuation handling | 中國人民不信邪也不怕邪，不惹事也不怕事，任何外國不要指望我們會拿自己的核心利益做交易，不要指望我們會吞下損害我國主權、安全、發展利益的苦果！ | unchanged (punctuation and whitespace retained) |
+| 4 · language routing | Chinese runs: 中國人民不信邪也不怕邪 · 不惹事也不怕事 · 任何外國不要指望我們會拿自己的核心利益做交易 · 不要指望我們會吞下損害我國主權 · 安全 · 發展利益的苦果 (punctuation uses the language-neutral path) | one non-Chinese run: The sky above the port was the color of television, tuned to a dead channel. |
 | 5 · Chinese path (lexicon-zh lookup) | run 中國人民不信邪也不怕邪 → SplitUtf8: 中 國 人 民 不 信 邪 也 不 怕 邪 → PhraseMatcher: 中國人民 · 不信邪 · 也 · 不怕邪 → 中國人民 → zh ong1 g uo2 r en2 m in2 · … | — |
 | 6 · non-Chinese path (espeak-ng G2P) | — | the sky above the port was the color of television, tuned to a dead channel → ðə skˈaɪ əbˈʌv ðə pˈɔɹt wˈʌz ðə kˈʌlɚ əv tˈɛləvɪʒən, tjˈund tə ə dˈɛd tʃˈænəl |
 | 7 · numeric token IDs | per sentence, BOS/EOS = 0 · e.g. `[0, 13, 5, …, 0]` | per sentence, BOS/EOS = 0 · e.g. `[0, 42, 18, …, 0]` |

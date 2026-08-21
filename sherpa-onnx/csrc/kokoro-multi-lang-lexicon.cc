@@ -8,7 +8,7 @@
 #include <cctype>
 #include <fstream>
 #include <iterator>
-#include <regex>
+#include <map>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -41,14 +41,15 @@ namespace sherpa_onnx {
 
 class KokoroMultiLangLexicon::Impl {
  private:
-  enum class LanguageType {
+  enum class ChunkType {
     kChinese,
     kNonChinese,
+    kPunctuation,
   };
 
   struct TextChunk {
     std::string text;
-    LanguageType language = LanguageType::kNonChinese;
+    ChunkType type = ChunkType::kNonChinese;
   };
 
   // G2P implementations populate only text and phonemes. model_suffix holds
@@ -107,17 +108,17 @@ class KokoroMultiLangLexicon::Impl {
       const std::string &_text, const std::string &voice) const {
     auto text_chunks = SplitTextIntoLanguageChunks(_text);
 
-    // HasUnsegmentedScript() checks only the voice prefix and Unicode script
-    // ranges. SplitTextIntoLanguageChunks() changes punctuation and
-    // whitespace but never those script characters, so _text and the joined
-    // normalized chunks produce the same result here.
+    // SplitTextIntoLanguageChunks() preserves the original text exactly, so
+    // script detection can use _text directly.
     bool supports_term_alignments = !HasUnsegmentedScript(_text, voice);
 
     std::vector<G2pSentence> g2p_sentences;
     for (const auto &chunk : text_chunks) {
       std::vector<G2pSentence> sentences;
-      if (chunk.language == LanguageType::kChinese) {
+      if (chunk.type == ChunkType::kChinese) {
         sentences = G2pChinese(chunk.text);
+      } else if (chunk.type == ChunkType::kPunctuation) {
+        sentences = G2pPunctuation(chunk.text);
       } else {
         sentences = G2pNonChinese(chunk.text, voice);
       }
@@ -165,137 +166,116 @@ class KokoroMultiLangLexicon::Impl {
   }
 
  private:
+  static const std::map<char32_t, char32_t> &FullWidthPunctuationAliases() {
+    static const std::map<char32_t, char32_t> aliases = {
+        // Full-width forms of punctuation supported by Kokoro.
+        {U'；', U';'},
+        {U'：', U':'},
+        {U'，', U','},
+        {U'．', U'.'},
+        {U'！', U'!'},
+        {U'？', U'?'},
+        {U'＂', U'"'},
+        {U'（', U'('},
+        {U'）', U')'},
+        {U'－', U'—'},
+
+        // CJK punctuation.
+        {U'、', U','},
+        {U'。', U'.'},
+        {U'「', U'“'},
+        {U'」', U'”'},
+        {U'『', U'“'},
+        {U'』', U'”'},
+        {U'《', U'“'},
+        {U'》', U'”'},
+        {U'〈', U'“'},
+        {U'〉', U'”'},
+        {U'【', U'“'},
+        {U'】', U'”'},
+        {U'〔', U'“'},
+        {U'〕', U'”'},
+        {U'・', U' '},
+    };
+    return aliases;
+  }
+
+  static bool IsFullWidthPunctuation(char32_t c) {
+    const auto &aliases = FullWidthPunctuationAliases();
+    return aliases.find(c) != aliases.end();
+  }
+
+  static char32_t NormalizedPunctuation(char32_t c) {
+    const auto &aliases = FullWidthPunctuationAliases();
+    auto iter = aliases.find(c);
+    // Return punctuation without a full-width/CJK alias unchanged.
+    return iter == aliases.end() ? c : iter->second;
+  }
+
+  static bool IsHanCodepoint(char32_t c) { return c >= 0x4e00 && c <= 0x9fff; }
+
   std::vector<TextChunk> SplitTextIntoLanguageChunks(
       const std::string &text) const {
-    struct NormalizedChunk {
-      std::string text;
-      bool is_full_width_punctuation = false;
-    };
-
-    // This function splits text in two stages.
-    //
-    // Stage 1 preserves every original full-width punctuation mark as one
-    // independent chunk and maps it to the corresponding ASCII model token.
-    // For example:
-    //
-    //   "欢迎你。This"  -> ["欢迎你", "." (punctuation), "This"]
-    //   "欢迎你。中国"  -> ["欢迎你", "." (punctuation), "中国"]
-    //   "欢迎你。 This" -> ["欢迎你", "." (punctuation), " This"]
-    //
-    // Without this first stage, global replacement would produce
-    // "欢迎你.This". The language regex would then group ".This" into one
-    // non-Chinese run, and espeak would pronounce the leading period as the
-    // English word "dot". Keeping the punctuation chunk separate also means
-    // existing or repeated spaces cannot change how punctuation is routed.
-    //
-    // Stage 2 splits each remaining ordinary chunk into Chinese and
-    // non-Chinese runs. Thus:
-    //
-    //   "Hello，中国。This"
-    //     -> ["Hello" (non-Chinese), "," (non-Chinese),
-    //         "中国" (Chinese), "." (non-Chinese), "This" (non-Chinese)]
-    std::vector<NormalizedChunk> normalized_chunks;
+    std::vector<TextChunk> text_chunks;
     std::string current;
+    ChunkType current_type = ChunkType::kNonChinese;
+
     auto flush_current = [&]() {
       if (!current.empty()) {
-        normalized_chunks.push_back({std::move(current), false});
+        text_chunks.push_back({std::move(current), current_type});
         current.clear();
       }
     };
 
+    // Utf8ToUtf32: Decode UTF-8 once because punctuation aliases and Han ranges are Unicode
+    // codepoint properties, not byte properties. Iterating std::string bytes
+    // would split every non-ASCII character into multiple values.
     for (char32_t c : Utf8ToUtf32(text)) {
-      const char *punctuation = nullptr;
-      switch (c) {
-        case U'，':
-        case U'、':
-          punctuation = ",";
-          break;
-        case U'；':
-          punctuation = ";";
-          break;
-        case U'：':
-          punctuation = ":";
-          break;
-        case U'。':
-          punctuation = ".";
-          break;
-        case U'？':
-          punctuation = "?";
-          break;
-        case U'！':
-          punctuation = "!";
-          break;
-        default:
-          break;
+      // Retain the written full-width punctuation. Keep it in a separate chunk
+      // so G2pPunctuation() can normalize its phoneme and bypass
+      // language-specific G2P. Each codepoint remains one model token; the
+      // shared packing stage can merge adjacent punctuation sentences.
+      if (IsFullWidthPunctuation(c)) {
+        flush_current(); // flush the preceding chars first
+        text_chunks.push_back({Utf32ToUtf8(c), ChunkType::kPunctuation}); // flush current punctuation
+        continue;
       }
 
-      if (punctuation) {
+      // This is the current frontend route, not a complete language detector.
+      // Han is shared by Chinese and Japanese; Japanese support must make this
+      // decision from the requested language and surrounding kana/context.
+      //
+      //
+      // space            U+0020  -> kNonChinese
+      // tab              U+0009  -> kNonChinese
+      // newline          U+000A  -> kNonChinese
+      // carriage return  U+000D  -> kNonChinese
+      // For example: "中国 \tEnglish\r\n世界"
+      // ["中国"       kChinese]
+      // [" \tEnglish\r\n" kNonChinese]
+      // ["世界"       kChinese]
+      ChunkType type =
+          IsHanCodepoint(c) ? ChunkType::kChinese : ChunkType::kNonChinese;
+      if (!current.empty() && type != current_type) {
         flush_current();
-        normalized_chunks.push_back({punctuation, true});
-      } else {
-        current += Utf32ToUtf8(c);
       }
+      current_type = type;
+      current += Utf32ToUtf8(c);
     }
     flush_current();
 
-    // Retain the existing normalization for ordinary text. Full-width
-    // punctuation has already been mapped above so its origin is not lost.
-    const std::vector<std::pair<std::string, std::string>> replacements = {
-        {":", ","},
-        {"\\s+", " "},
-    };
-    for (auto &chunk : normalized_chunks) {
-      if (chunk.is_full_width_punctuation) {
-        continue;
-      }
-      for (const auto &replacement : replacements) {
-        std::regex re(replacement.first);
-        chunk.text = std::regex_replace(chunk.text, re, replacement.second);
-      }
-    }
-
-    // Partition ordinary normalized text into alternating Chinese
-    // ([一-龥]+) and non-Chinese ([^一-龥]+) runs. Full-width punctuation is
-    // already an independent non-Chinese chunk.
-    const std::string expr_chinese = "([\\u4e00-\\u9fff]+)";
-    const std::string expr_not_chinese = "([^\\u4e00-\\u9fff]+)";
-    const std::wstring expr_both =
-        ToWideString(expr_chinese + "|" + expr_not_chinese);
-    const std::wregex re_both(expr_both);
-    const std::wregex re_chinese(ToWideString(expr_chinese));
-
-    std::vector<TextChunk> text_chunks;
-    for (const auto &chunk : normalized_chunks) {
-      if (chunk.is_full_width_punctuation) {
-        text_chunks.push_back({chunk.text, LanguageType::kNonChinese});
-        continue;
-      }
-
-      auto ws = ToWideString(chunk.text);
-      auto begin = std::wsregex_iterator(ws.begin(), ws.end(), re_both);
-      auto end = std::wsregex_iterator();
-      for (auto i = begin; i != end; ++i) {
-        std::wstring match = i->str();
-        LanguageType language = std::regex_match(match, re_chinese)
-                                    ? LanguageType::kChinese
-                                    : LanguageType::kNonChinese;
-        text_chunks.push_back({ToString(match), language});
-      }
-    }
-
     if (debug_) {
-      std::string normalized_text;
+      std::string chunked_text;
       for (const auto &chunk : text_chunks) {
-        normalized_text += chunk.text;
+        chunked_text += chunk.text;
       }
-      SHERPA_ONNX_LOGE("After replacing punctuations and merging spaces:\n%s",
-                       normalized_text.c_str());
+      SHERPA_ONNX_LOGE("After language chunking:\n%s", chunked_text.c_str());
       for (const auto &chunk : text_chunks) {
-        SHERPA_ONNX_LOGE("%s: %s",
-                         chunk.language == LanguageType::kChinese
-                             ? "Chinese"
-                             : "Non-Chinese",
-                         chunk.text.c_str());
+        const char *type = chunk.type == ChunkType::kChinese ? "Chinese"
+                           : chunk.type == ChunkType::kPunctuation
+                               ? "Punctuation"
+                               : "Non-Chinese";
+        SHERPA_ONNX_LOGE("%s: %s", type, chunk.text.c_str());
       }
     }
 
@@ -488,14 +468,29 @@ class KokoroMultiLangLexicon::Impl {
   }
 
   bool IsPunctuation(const std::string &text) const {
-    if (text == ";" || text == ":" || text == "," || text == "." ||
-        text == "!" || text == "?" || text == "—" || text == "…" ||
-        text == "\"" || text == "(" || text == ")" || text == "“" ||
-        text == "”") {
-      return true;
+    auto codepoints = Utf8ToUtf32(text);
+    if (codepoints.empty()) {
+      return false;
     }
 
-    return false;
+    return std::all_of(codepoints.begin(), codepoints.end(), [](char32_t c) {
+      return c == U';' || c == U':' || c == U',' || c == U'.' || c == U'!' ||
+             c == U'?' || c == U'—' || c == U'…' || c == U'"' || c == U'(' ||
+             c == U')' || c == U'“' || c == U'”';
+    });
+  }
+
+  std::vector<G2pSentence> G2pPunctuation(const std::string &text) const {
+    std::string phoneme;
+    for (char32_t c : Utf8ToUtf32(text)) {
+      phoneme += Utf32ToUtf8(NormalizedPunctuation(c));
+    }
+
+    G2pSentence sentence;
+    sentence.terms.push_back({text, std::move(phoneme), ""});
+    std::vector<G2pSentence> ans;
+    ans.push_back(std::move(sentence));
+    return ans;
   }
 
   std::vector<std::string> SplitWrittenTerms(const std::string &text) const {
@@ -885,11 +880,7 @@ class KokoroMultiLangLexicon::Impl {
   std::vector<G2pSentence> G2pNonChinese(const std::string &text,
                                          const std::string &voice) const {
     if (IsPunctuation(text)) {
-      G2pSentence sentence;
-      sentence.terms.push_back({text, text, ""});
-      std::vector<G2pSentence> ans;
-      ans.push_back(std::move(sentence));
-      return ans;
+      return G2pPunctuation(text);
     }
 
     if (!voice.empty()) {
