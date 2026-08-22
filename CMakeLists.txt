@@ -567,6 +567,22 @@ endif()
 include(json)
 
 if(SHERPA_ONNX_ENABLE_TTS)
+  find_package(ICU 78 REQUIRED COMPONENTS i18n uc data)
+
+  # ICU's static libraries require its public headers to use static linkage
+  # declarations. FindICU does not add U_STATIC_IMPLEMENTATION to its imported
+  # targets, so detect the library form selected for this build.
+  set(SHERPA_ONNX_ICU_IS_STATIC OFF)
+  foreach(icu_library IN LISTS ICU_LIBRARIES)
+    get_filename_component(icu_library_name "${icu_library}" NAME)
+    if((icu_library_name MATCHES "\\.a$" AND
+        NOT icu_library_name MATCHES "\\.dll\\.a$") OR
+       (MSVC AND icu_library_name MATCHES "^sicu.*\\.lib$"))
+      set(SHERPA_ONNX_ICU_IS_STATIC ON)
+      break()
+    endif()
+  endforeach()
+
   include(espeak-ng-for-piper)
   set(ESPEAK_NG_DIR ${espeak_ng_SOURCE_DIR})
   message(STATUS "ESPEAK_NG_DIR: ${ESPEAK_NG_DIR}")

@@ -9,12 +9,17 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <unicode/brkiter.h>
+#include <unicode/locid.h>
+#include <unicode/unistr.h>
 
 #include "sherpa-onnx/csrc/macros.h"
 
@@ -584,12 +589,63 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
+  bool SplitChineseWithIcu(const std::string &text,
+                           std::vector<std::string> *words) const {
+    UErrorCode status = U_ZERO_ERROR;
+    std::unique_ptr<icu::BreakIterator> break_iterator(
+        icu::BreakIterator::createWordInstance(icu::Locale("zh"), status));
+    if (U_FAILURE(status) || !break_iterator) {
+#if __OHOS__
+      SHERPA_ONNX_LOGE(
+          "Failed to create ICU Chinese word iterator: %{public}s. "
+          "Fall back to PhraseMatcher.",
+          u_errorName(status));
+#else
+      SHERPA_ONNX_LOGE(
+          "Failed to create ICU Chinese word iterator: %s. "
+          "Fall back to PhraseMatcher.",
+          u_errorName(status));
+#endif
+      return false;
+    }
+
+    icu::UnicodeString unicode_text = icu::UnicodeString::fromUTF8(text);
+    break_iterator->setText(unicode_text);
+
+    words->clear();
+    int32_t start = break_iterator->first();
+    while (true) {
+      int32_t end = break_iterator->next();
+      if (end == icu::BreakIterator::DONE) {
+        break;
+      }
+
+      std::string word;
+      unicode_text.tempSubStringBetween(start, end).toUTF8String(word);
+      if (!word.empty() &&
+          word.find_first_not_of(" \t\r\n") != std::string::npos) {
+        words->push_back(std::move(word));
+      }
+      start = end;
+    }
+    return true;
+  }
+
   std::vector<G2pSentence> G2pChinese(const std::string &text) const {
-    // Split the run into one UTF-8 character per element, e.g.
-    // 中國人民不信邪 → [中, 國, 人, 民, 不, 信, 邪]. PhraseMatcher then groups
-    // adjacent characters into the longest lexicon phrases (max 10 chars),
-    // falling back to single characters for unmatched ones.
-    std::vector<std::string> words = SplitUtf8(text);
+    // ICU supplies the written term boundaries. A term uses its exact lexicon
+    // pronunciation when present; ConvertWordToIds() otherwise composes the
+    // pronunciation from single-character entries without greedy sub-phrase
+    // matching.
+    std::vector<std::string> words;
+    bool used_icu = SplitChineseWithIcu(text, &words);
+    if (!used_icu) {
+      // Preserve the previous behavior if ICU cannot load its word iterator
+      // or dictionary data: greedily match the longest lexicon phrases, then
+      // fall back to individual UTF-8 characters.
+      auto characters = SplitUtf8(text);
+      PhraseMatcher matcher(&all_words_, characters, debug_);
+      words.assign(matcher.begin(), matcher.end());
+    }
 
     if (debug_) {
       std::ostringstream os;
@@ -599,16 +655,16 @@ class KokoroMultiLangLexicon::Impl {
         sep = "_";
       }
 #if __OHOS__
-      SHERPA_ONNX_LOGE("after splitting into UTF8:\n%{public}s",
-                       os.str().c_str());
+      SHERPA_ONNX_LOGE("After %{public}s Chinese segmentation:\n%{public}s",
+                       used_icu ? "ICU" : "fallback greedy", os.str().c_str());
 #else
-      SHERPA_ONNX_LOGE("after splitting into UTF8:\n%s", os.str().c_str());
+      SHERPA_ONNX_LOGE("After %s Chinese segmentation:\n%s",
+                       used_icu ? "ICU" : "fallback greedy", os.str().c_str());
 #endif
     }
 
     G2pSentence sentence;
-    PhraseMatcher matcher(&all_words_, words, debug_);
-    for (const std::string &word : matcher) {
+    for (const std::string &word : words) {
       auto ids = ConvertWordToIds(word);
       if (ids.empty()) {
 #if __OHOS__

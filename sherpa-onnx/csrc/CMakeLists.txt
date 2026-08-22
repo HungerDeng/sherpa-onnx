@@ -479,7 +479,17 @@ target_link_libraries(sherpa-onnx-core fstfar fst)
 
 if(SHERPA_ONNX_ENABLE_TTS)
   target_link_libraries(sherpa-onnx-core
-    piper_phonemize)
+    piper_phonemize
+    ICU::i18n
+    ICU::uc
+    ICU::data
+  )
+
+  if(SHERPA_ONNX_ICU_IS_STATIC)
+    target_compile_definitions(sherpa-onnx-core PRIVATE
+      U_STATIC_IMPLEMENTATION
+    )
+  endif()
 endif()
 
 if(SHERPA_ONNX_ENABLE_CHECK)
