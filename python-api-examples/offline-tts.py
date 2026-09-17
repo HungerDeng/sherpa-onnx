@@ -120,7 +120,7 @@ python3 ./python-api-examples/offline-tts.py \
   --kokoro-voices=./kokoro-multi-lang-v1_0/voices.bin \
   --kokoro-tokens=./kokoro-multi-lang-v1_0/tokens.txt \
   --kokoro-data-dir=./kokoro-multi-lang-v1_0/espeak-ng-data \
-  --kokoro-lexicon=./kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-zh.txt \
+  --kokoro-lexicon=./kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-cmn.txt \
   --num-threads=2 \
   --sid=18 \
   --output-filename="./kokoro-18-zh-en.wav" \

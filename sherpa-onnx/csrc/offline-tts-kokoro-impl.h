@@ -10,8 +10,9 @@
 #include <ios>
 #include <memory>
 #include <numeric>
-#include <string>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -153,13 +154,33 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
   //                    at 0.2, it falls back to OfflineTtsConfig.silence_scale.
   //
   // Supported extra options in config.extra:
-  //   - lang: Language override for Kokoro >= 1.0. Defaults to
-  //           kokoro.lang if provided, otherwise meta_data.voice.
+  //   - lang: Required Kokoro language. Overrides kokoro.lang.
   GeneratedAudio Generate(
       const std::string &_text, const GenerationConfig &gen_config,
       GeneratedAudioCallback callback = nullptr) const override {
     if (config_.model.debug) {
       SHERPA_ONNX_LOGE("%s", gen_config.ToString().c_str());
+    }
+
+    std::string lang = gen_config.GetExtraString("lang");
+    if (lang.empty()) {
+      lang = config_.model.kokoro.lang;
+    }
+    if (lang.empty()) {
+      throw std::invalid_argument(
+          "Kokoro language is required. Set kokoro.lang in the model "
+          "configuration or GenerationConfig.extra[\"lang\"].");
+    }
+    static const std::array<std::string, 10> supported_languages = {
+        "en-us", "en-gb", "ja-cutlet", "ja-jtalk", "cmn",
+        "es",    "fr",    "hi",        "it",       "pt-br",
+    };
+    if (std::find(supported_languages.begin(), supported_languages.end(),
+                  lang) == supported_languages.end()) {
+      throw std::invalid_argument(
+          "Unsupported Kokoro language '" + lang +
+          "'. Supported languages: en-us, en-gb, ja-cutlet, ja-jtalk, cmn, "
+          "es, fr, hi, it, pt-br.");
     }
 
     int64_t sid = gen_config.sid;
@@ -235,12 +256,6 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
 #endif
         }
       }
-    }
-
-    std::string lang = gen_config.GetExtraString("lang");
-    if (lang.empty()) {
-      lang = config_.model.kokoro.lang.empty() ? meta_data.voice
-                                               : config_.model.kokoro.lang;
     }
 
     std::vector<SplitSentence> split_sentences;
@@ -399,16 +414,6 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
     const auto &meta_data = model_->GetMetaData();
 
     if (meta_data.version >= 2) {
-      // this is a multi-lingual model, we require that you pass lexicon
-      if (config_.model.kokoro.lexicon.empty() &&
-          config_.model.kokoro.lang.empty()) {
-        SHERPA_ONNX_LOGE("Current model version: '%d'", meta_data.version);
-        SHERPA_ONNX_LOGE(
-            "You are using a multi-lingual Kokoro model (e.g., Kokoro >= "
-            "v1.0). Please pass --kokoro-lexicon or provide --kokoro-lang");
-        SHERPA_ONNX_EXIT(-1);
-      }
-
       frontend_ = std::make_unique<KokoroMultiLangLexicon>(
           mgr, config_.model.kokoro.tokens, config_.model.kokoro.lexicon,
           config_.model.kokoro.data_dir, meta_data, config_.model.debug);
@@ -424,16 +429,6 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
   void InitFrontend() {
     const auto &meta_data = model_->GetMetaData();
     if (meta_data.version >= 2) {
-      // this is a multi-lingual model, we require that you pass lexicon
-      if (config_.model.kokoro.lexicon.empty() &&
-          config_.model.kokoro.lang.empty()) {
-        SHERPA_ONNX_LOGE("Current model version: '%d'", meta_data.version);
-        SHERPA_ONNX_LOGE(
-            "You are using a multi-lingual Kokoro model (e.g., Kokoro >= "
-            "v1.0). please pass --kokoro-lexicon or --kokoro-lang");
-        SHERPA_ONNX_EXIT(-1);
-      }
-
       frontend_ = std::make_unique<KokoroMultiLangLexicon>(
           config_.model.kokoro.tokens, config_.model.kokoro.lexicon,
           config_.model.kokoro.data_dir, meta_data, config_.model.debug);
@@ -502,7 +497,11 @@ class OfflineTtsKokoroImpl : public OfflineTtsImpl {
           std::accumulate(pred_dur.begin() + phoneme_end,
                           pred_dur.begin() + term_end, int64_t{0});
 
-      TermAlignment alignment{term.text, term.phoneme, -1.0f, -1.0f};
+      // The phoneme strings describe the term but do not participate in the
+      // timestamp calculation. Boundaries depend only on token counts and
+      // the model-predicted durations accumulated above.
+      TermAlignment alignment{term.text, term.raw_phonemes,
+                              term.inferred_phonemes, -1.0f, -1.0f};
       if (term.num_phoneme_tokens != 0) {
         alignment.start_ts = left / kMagicDivisor;
         left = right + 2 * phoneme_duration + suffix_duration;

@@ -130,7 +130,10 @@ class GeneratedAudio(
 
 class TermAlignment(
     val text: String,
-    val phoneme: String,
+    // G2P output before model-token filtering and alias canonicalization.
+    val rawPhonemes: String,
+    // Canonical phonemes reconstructed from the model token IDs.
+    val inferredPhonemes: String,
     val startTs: Float,
     val endTs: Float,
 )

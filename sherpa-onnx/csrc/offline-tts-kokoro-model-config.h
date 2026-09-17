@@ -17,7 +17,7 @@ struct OfflineTtsKokoroModelConfig {
   std::string tokens;
 
   // Note: You can pass multiple files, separated by ",", to lexicon
-  // Example: lexicon = "./lexicon-gb-en.txt,./lexicon-zh.txt";
+  // Example: lexicon = "./lexicon-gb-en.txt,./lexicon-cmn.txt";
   std::string lexicon;
 
   std::string data_dir;
@@ -27,10 +27,10 @@ struct OfflineTtsKokoroModelConfig {
   // speed = 1 / length_scale
   float length_scale = 1.0;
 
-  // Used only for Kokoro >= 1.0.
-  //
-  // If it is not empty, meta_data.voice is ignored.
-  // Example values: es (Spanish), fr (French), pt (Portuguese)
+  // Required at generation time unless GenerationConfig.extra["lang"] is
+  // provided. A per-generation value takes precedence over this field.
+  // Supported values: en-us, en-gb, ja-cutlet, ja-jtalk, cmn, es, fr, hi, it,
+  // and pt-br.
   // See https://hf-mirror.com/hexgrad/Kokoro-82M/blob/main/VOICES.md
   std::string lang;
 

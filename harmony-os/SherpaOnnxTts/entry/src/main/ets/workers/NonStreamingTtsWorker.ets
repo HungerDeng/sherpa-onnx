@@ -181,7 +181,7 @@ function initTts(context: Context): OfflineTts {
   // modelName = 'model.onnx';
   // voices = 'voices.bin'
   // dataDir = 'espeak-ng-data';
-  // lexicon = 'lexicon-us-en.txt,lexicon-zh.txt';
+  // lexicon = 'lexicon-us-en.txt,lexicon-cmn.txt';
   // ruleFsts = `date-zh.fst,phone-zh.fst,number-zh.fst`;
 
   // ============================================================

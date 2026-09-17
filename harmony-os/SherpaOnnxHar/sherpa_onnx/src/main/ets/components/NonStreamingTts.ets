@@ -112,7 +112,10 @@ export class TtsOutput {
 
 export class TermAlignment {
   public text: string = '';
-  public phoneme: string = '';
+  // G2P output before model-token filtering and alias canonicalization.
+  public rawPhonemes: string = '';
+  // Canonical phonemes reconstructed from the model token IDs.
+  public inferredPhonemes: string = '';
   public startTs: number = -1;
   public endTs: number = -1;
 }

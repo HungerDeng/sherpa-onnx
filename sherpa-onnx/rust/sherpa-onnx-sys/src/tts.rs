@@ -122,7 +122,8 @@ pub struct OfflineTtsConfig {
 #[derive(Debug, Copy, Clone)]
 pub struct SherpaOnnxTermAlignment {
     pub text: *const c_char,
-    pub phoneme: *const c_char,
+    pub raw_phonemes: *const c_char,
+    pub inferred_phonemes: *const c_char,
     pub start_ts: c_float,
     pub end_ts: c_float,
 }

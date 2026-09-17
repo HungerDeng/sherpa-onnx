@@ -130,7 +130,10 @@ class OfflineTts {
         termAlignments.add(
           TermAlignment(
             text: (a.getProperty('text'.toJS) as JSString).toDart,
-            phoneme: (a.getProperty('phoneme'.toJS) as JSString).toDart,
+            rawPhonemes:
+                (a.getProperty('rawPhonemes'.toJS) as JSString).toDart,
+            inferredPhonemes:
+                (a.getProperty('inferredPhonemes'.toJS) as JSString).toDart,
             startTs: (a.getProperty('startTs'.toJS) as JSNumber).toDartDouble,
             endTs: (a.getProperty('endTs'.toJS) as JSNumber).toDartDouble,
           ),

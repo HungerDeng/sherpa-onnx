@@ -371,7 +371,8 @@ class OfflineTts {
           final a = p.ref.termAlignments[i];
           return TermAlignment(
             text: a.text.toDartString(),
-            phoneme: a.phoneme.toDartString(),
+            rawPhonemes: a.rawPhonemes.toDartString(),
+            inferredPhonemes: a.inferredPhonemes.toDartString(),
             startTs: a.startTs,
             endTs: a.endTs,
           );

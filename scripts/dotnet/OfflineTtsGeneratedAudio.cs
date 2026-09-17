@@ -58,7 +58,8 @@ namespace SherpaOnnx
         struct AlignmentImpl
         {
             public IntPtr Text;
-            public IntPtr Phoneme;
+            public IntPtr RawPhonemes;
+            public IntPtr InferredPhonemes;
             public float StartTs;
             public float EndTs;
         }
@@ -111,8 +112,8 @@ namespace SherpaOnnx
                     IntPtr p = IntPtr.Add(impl.TermAlignments, i * size);
                     AlignmentImpl a = (AlignmentImpl)Marshal.PtrToStructure(p, typeof(AlignmentImpl));
                     ans[i] = new TermAlignment(
-                        Utf8ToString(a.Text), Utf8ToString(a.Phoneme),
-                        a.StartTs, a.EndTs);
+                        Utf8ToString(a.Text), Utf8ToString(a.RawPhonemes),
+                        Utf8ToString(a.InferredPhonemes), a.StartTs, a.EndTs);
                 }
                 return ans;
             }
@@ -141,16 +142,21 @@ namespace SherpaOnnx
 
     public class TermAlignment
     {
-        public TermAlignment(String text, String phoneme, float startTs, float endTs)
+        public TermAlignment(String text, String rawPhonemes,
+            String inferredPhonemes, float startTs, float endTs)
         {
             Text = text;
-            Phoneme = phoneme;
+            RawPhonemes = rawPhonemes;
+            InferredPhonemes = inferredPhonemes;
             StartTs = startTs;
             EndTs = endTs;
         }
 
         public String Text { get; }
-        public String Phoneme { get; }
+        // G2P output before model-token filtering and alias canonicalization.
+        public String RawPhonemes { get; }
+        // Canonical phonemes reconstructed from the model token IDs.
+        public String InferredPhonemes { get; }
         public float StartTs { get; }
         public float EndTs { get; }
     }

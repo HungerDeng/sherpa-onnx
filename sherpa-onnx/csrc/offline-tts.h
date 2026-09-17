@@ -57,7 +57,14 @@ struct OfflineTtsConfig {
 
 struct TermAlignment {
   std::string text;
-  std::string phoneme;
+
+  // Phonemes returned directly by the G2P frontend, before model-token
+  // filtering and alias canonicalization.
+  std::string raw_phonemes;
+
+  // Canonical phonemes reconstructed from the token IDs sent to the model.
+  std::string inferred_phonemes;
+
   float start_ts = -1.0f;
   float end_ts = -1.0f;
 };

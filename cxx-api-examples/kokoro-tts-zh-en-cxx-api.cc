@@ -43,7 +43,7 @@ int32_t main(int32_t argc, char *argv[]) {
   config.model.kokoro.dict_dir = "./kokoro-multi-lang-v1_0/dict";
   config.model.kokoro.lexicon =
       "./kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/"
-      "lexicon-zh.txt";
+      "lexicon-cmn.txt";
 
   config.model.num_threads = 2;
 

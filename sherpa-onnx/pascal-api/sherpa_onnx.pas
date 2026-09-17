@@ -187,7 +187,8 @@ type
 
   TSherpaOnnxTermAlignment = record
     Text: AnsiString;
-    Phoneme: AnsiString;
+    RawPhonemes: AnsiString;
+    InferredPhonemes: AnsiString;
     StartTs: Single;
     EndTs: Single;
   end;
@@ -1253,13 +1254,15 @@ type
 
   SherpaOnnxTermAlignment = record
     Text: PAnsiChar;
-    Phoneme: PAnsiChar;
+    RawPhonemes: PAnsiChar;
+    InferredPhonemes: PAnsiChar;
     StartTs: cfloat;
     EndTs: cfloat;
   end;
 
   PSherpaOnnxTermAlignment = ^SherpaOnnxTermAlignment;
-  TSherpaOnnxTermAlignmentArray = array[0..(MaxInt div 24) - 1] of SherpaOnnxTermAlignment;
+  // On 64-bit Pascal targets: 3 pointers * 8 bytes + 2 cfloat * 4 bytes = 32.
+  TSherpaOnnxTermAlignmentArray = array[0..(MaxInt div 32) - 1] of SherpaOnnxTermAlignment;
   PSherpaOnnxTermAlignmentArray = ^TSherpaOnnxTermAlignmentArray;
 
   SherpaOnnxGeneratedAudio = record
@@ -3098,7 +3101,8 @@ begin
     for I := 0 to Audio^.NumTermAlignments - 1 do
     begin
       Result.TermAlignments[I].Text := AnsiString(Alignments^[I].Text);
-      Result.TermAlignments[I].Phoneme := AnsiString(Alignments^[I].Phoneme);
+      Result.TermAlignments[I].RawPhonemes := AnsiString(Alignments^[I].RawPhonemes);
+      Result.TermAlignments[I].InferredPhonemes := AnsiString(Alignments^[I].InferredPhonemes);
       Result.TermAlignments[I].StartTs := Alignments^[I].StartTs;
       Result.TermAlignments[I].EndTs := Alignments^[I].EndTs;
     end;

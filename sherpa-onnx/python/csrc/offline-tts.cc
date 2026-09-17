@@ -16,7 +16,8 @@ static void PybindGeneratedAudio(py::module *m) {
   py::class_<TermAlignment>(*m, "TermAlignment")
       .def(py::init<>())
       .def_readwrite("text", &TermAlignment::text)
-      .def_readwrite("phoneme", &TermAlignment::phoneme)
+      .def_readwrite("raw_phonemes", &TermAlignment::raw_phonemes)
+      .def_readwrite("inferred_phonemes", &TermAlignment::inferred_phonemes)
       .def_readwrite("start_ts", &TermAlignment::start_ts)
       .def_readwrite("end_ts", &TermAlignment::end_ts);
 

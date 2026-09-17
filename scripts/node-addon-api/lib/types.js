@@ -432,7 +432,8 @@
 /**
  * @typedef {Object} TermAlignment
  * @property {string} text
- * @property {string} phoneme
+ * @property {string} rawPhonemes - G2P output before model-token filtering.
+ * @property {string} inferredPhonemes - Canonical model-token phonemes.
  * @property {number} startTs - Currently -1 because timing is unavailable.
  * @property {number} endTs - Currently -1 because timing is unavailable.
  */

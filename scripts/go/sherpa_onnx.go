@@ -1095,10 +1095,11 @@ type GeneratedAudio struct {
 }
 
 type TermAlignment struct {
-	Text    string
-	Phoneme string
-	StartTs float32
-	EndTs   float32
+	Text             string
+	RawPhonemes      string
+	InferredPhonemes string
+	StartTs          float32
+	EndTs            float32
 }
 
 func copyGeneratedAudio(audio *C.struct_SherpaOnnxGeneratedAudio) *GeneratedAudio {
@@ -1118,8 +1119,11 @@ func copyGeneratedAudio(audio *C.struct_SherpaOnnxGeneratedAudio) *GeneratedAudi
 		ans.TermAlignments = make([]TermAlignment, count)
 		for i, item := range items {
 			ans.TermAlignments[i] = TermAlignment{
-				Text: C.GoString(item.text), Phoneme: C.GoString(item.phoneme),
-				StartTs: float32(item.start_ts), EndTs: float32(item.end_ts),
+				Text:              C.GoString(item.text),
+				RawPhonemes:      C.GoString(item.raw_phonemes),
+				InferredPhonemes: C.GoString(item.inferred_phonemes),
+				StartTs:           float32(item.start_ts),
+				EndTs:             float32(item.end_ts),
 			}
 		}
 	}

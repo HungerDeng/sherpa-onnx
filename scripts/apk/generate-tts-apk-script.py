@@ -572,7 +572,7 @@ def get_kokoro_models() -> List[TtsModel]:
     for m in multi_lingual_models:
         m.data_dir = f"{m.model_dir}/espeak-ng-data"
         m.voices = "voices.bin"
-        m.lexicon = f"{m.model_dir}/lexicon-us-en.txt,{m.model_dir}/lexicon-zh.txt"
+        m.lexicon = f"{m.model_dir}/lexicon-us-en.txt,{m.model_dir}/lexicon-cmn.txt"
         m.rule_fsts = f"{m.model_dir}/phone-zh.fst,{m.model_dir}/date-zh.fst,{m.model_dir}/number-zh.fst"
 
     return english_models + multi_lingual_models
