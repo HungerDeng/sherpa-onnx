@@ -18,7 +18,11 @@ config = sherpa_onnx.OfflineTtsConfig(
             tokens="./tokens.txt",
             data_dir="./espeak-ng-data",
             dict_dir="./dict",
-            lexicon="./lexicon-zh.txt,./lexicon-us-en.txt",
+            lexicon=(
+                "./lexicon-cmn.txt,./lexicon-us-en.txt,"
+                "./lexicon-ja-cutlet.txt"
+            ),
+            lang="cmn",
         ),
         num_threads=2,
         debug=True,

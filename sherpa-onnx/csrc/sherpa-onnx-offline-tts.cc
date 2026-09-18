@@ -4,6 +4,7 @@
 
 #include <chrono>  // NOLINT
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <utility>
@@ -227,7 +228,12 @@ or details.
     gen_config.reference_text = reference_text;
   }
 
-  audio = tts.Generate(po.GetArg(1), gen_config, AudioCallback);
+  try {
+    audio = tts.Generate(po.GetArg(1), gen_config, AudioCallback);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Failed to generate audio: %s\n", e.what());
+    return EXIT_FAILURE;
+  }
 
   const auto end = std::chrono::steady_clock::now();
 
@@ -247,10 +253,11 @@ or details.
       for (size_t i = 0; i != audio.term_alignments->size(); ++i) {
         const auto &alignment = (*audio.term_alignments)[i];
         fprintf(stderr,
-                "Term alignment %zu: text='%s', phoneme='%s', start_ts=%.3f, "
-                "end_ts=%.3f\n",
-                i, alignment.text.c_str(), alignment.phoneme.c_str(),
-                alignment.start_ts, alignment.end_ts);
+                "Term alignment %zu: text='%s', raw_phonemes='%s', "
+                "inferred_phonemes='%s', start_ts=%.3f, end_ts=%.3f\n",
+                i, alignment.text.c_str(), alignment.raw_phonemes.c_str(),
+                alignment.inferred_phonemes.c_str(), alignment.start_ts,
+                alignment.end_ts);
       }
     }
   }

@@ -123,9 +123,9 @@ def save(filename: str, lexicon: List[Tuple[str, str]]):
 
 
 def main():
-    zh = generate_chinese_lexicon()
+    cmn = generate_chinese_lexicon()
 
-    save("lexicon-zh.txt", zh)
+    save("lexicon-cmn.txt", cmn)
 
 
 if __name__ == "__main__":

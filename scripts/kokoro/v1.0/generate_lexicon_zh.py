@@ -42,14 +42,14 @@ def generate_chinese_lexicon():
 def save(filename: str, lexicon: List[Tuple[str, str]]):
     with open(filename, "w", encoding="utf-8") as f:
         for word, phones in lexicon:
-            tokens = " ".join(list(phones))
+            tokens = " ".join("<space>" if p == " " else p for p in phones)
             f.write(f"{word} {tokens}\n")
 
 
 def main():
-    zh = generate_chinese_lexicon()
+    cmn = generate_chinese_lexicon()
 
-    save("lexicon-zh.txt", zh)
+    save("lexicon-cmn.txt", cmn)
 
 
 if __name__ == "__main__":

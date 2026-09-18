@@ -25,7 +25,7 @@ begin
   Config.Model.Kokoro.Tokens := './kokoro-multi-lang-v1_0/tokens.txt';
   Config.Model.Kokoro.DataDir := './kokoro-multi-lang-v1_0/espeak-ng-data';
   Config.Model.Kokoro.DictDir := './kokoro-multi-lang-v1_0/dict';
-  Config.Model.Kokoro.Lexicon := './kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-zh.txt';
+  Config.Model.Kokoro.Lexicon := './kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-cmn.txt';
   Config.Model.NumThreads := 2;
   Config.Model.Debug := False;
   Config.MaxNumSentences := 1;

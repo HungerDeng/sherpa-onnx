@@ -37,11 +37,20 @@ struct TokenIDs {
 
 struct Term {
   std::string text;
-  std::string phoneme;
+
+  // Phonemes produced by the G2P frontend before model-token filtering and
+  // alias canonicalization.
+  std::string raw_phonemes;
+
+  // Phonemes reconstructed from the IDs accepted by the model tokenizer.
+  // These can differ from raw_phonemes when a phoneme is unsupported or an
+  // input symbol maps to a canonical model token.
+  std::string inferred_phonemes;
   TokenIDs token_ids;
 
-  // Number of leading token IDs represented by phoneme. Any remaining token
-  // IDs are model-only suffixes, such as the space following an espeak word.
+  // Number of leading token IDs represented by inferred_phonemes. Any
+  // remaining token IDs are model-only suffixes, such as the space following
+  // an espeak word.
   int32_t num_phoneme_tokens = 0;
 };
 

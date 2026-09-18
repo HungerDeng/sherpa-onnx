@@ -18,7 +18,7 @@ fn main() {
                 data_dir: Some("./kokoro-multi-lang-v1_0/espeak-ng-data".into()),
                 dict_dir: Some("./kokoro-multi-lang-v1_0/dict".into()),
                 lexicon: Some(
-                    "./kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-zh.txt".into(),
+                    "./kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-cmn.txt".into(),
                 ),
                 length_scale: 1.0,
                 ..Default::default()

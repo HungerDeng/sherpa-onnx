@@ -2307,9 +2307,10 @@ typedef struct SherpaOnnxOfflineTtsKokoroModelConfig {
   float length_scale;
   /** Unused legacy field kept for ABI compatibility. */
   const char *dict_dir;
-  /** Optional lexicon file. */
+  /** Optional comma-separated standard Kokoro lexicon paths. */
   const char *lexicon;
-  /** Optional language hint. */
+  /** Required Kokoro language (e.g. zh, ja-cutlet, ja-jtalk) unless supplied
+   * in generation config extra. */
   const char *lang;
 } SherpaOnnxOfflineTtsKokoroModelConfig;
 
@@ -2475,8 +2476,10 @@ typedef struct SherpaOnnxOfflineTtsConfig {
 typedef struct SherpaOnnxTermAlignment {
   /** Frontend-normalized written word, phrase, or punctuation. */
   const char *text;
-  /** Kokoro phoneme symbols assigned to this term. */
-  const char *phoneme;
+  /** G2P phonemes before model-token filtering and alias canonicalization. */
+  const char *raw_phonemes;
+  /** Canonical phonemes reconstructed from the model token IDs. */
+  const char *inferred_phonemes;
   /** Start time in seconds, or -1 for an unpronounced term. */
   float start_ts;
   /** End time in seconds, or -1 for an unpronounced term. */
@@ -2492,7 +2495,8 @@ typedef struct SherpaOnnxGeneratedAudio {
   int32_t sample_rate;
   /**
    * Kokoro v1.0+ term alignments, or NULL when unavailable. The array and its
-   * text/phoneme strings remain valid until this generated audio is destroyed.
+   * text/raw_phonemes/inferred_phonemes strings remain valid until this
+   * generated audio is destroyed.
    */
   const SherpaOnnxTermAlignment *term_alignments;
   /** Number of entries in @c term_alignments. */

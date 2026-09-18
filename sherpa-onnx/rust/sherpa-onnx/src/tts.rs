@@ -447,7 +447,10 @@ pub struct GeneratedAudio {
 #[derive(Clone, Debug)]
 pub struct TermAlignment {
     pub text: String,
-    pub phoneme: String,
+    /// G2P output before model-token filtering and alias canonicalization.
+    pub raw_phonemes: String,
+    /// Canonical phonemes reconstructed from the model token IDs.
+    pub inferred_phonemes: String,
     pub start_ts: f32,
     pub end_ts: f32,
 }
@@ -494,7 +497,10 @@ impl GeneratedAudio {
                         text: CStr::from_ptr(a.text)
                             .to_string_lossy()
                             .into_owned(),
-                        phoneme: CStr::from_ptr(a.phoneme)
+                        raw_phonemes: CStr::from_ptr(a.raw_phonemes)
+                            .to_string_lossy()
+                            .into_owned(),
+                        inferred_phonemes: CStr::from_ptr(a.inferred_phonemes)
                             .to_string_lossy()
                             .into_owned(),
                         start_ts: a.start_ts,

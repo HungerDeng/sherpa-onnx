@@ -523,13 +523,17 @@ class GeneratedAudio {
 class TermAlignment {
   const TermAlignment({
     required this.text,
-    required this.phoneme,
+    required this.rawPhonemes,
+    required this.inferredPhonemes,
     required this.startTs,
     required this.endTs,
   });
 
   final String text;
-  final String phoneme;
+  /// G2P output before model-token filtering and alias canonicalization.
+  final String rawPhonemes;
+  /// Canonical phonemes reconstructed from the model token IDs.
+  final String inferredPhonemes;
   final double startTs;
   final double endTs;
 }

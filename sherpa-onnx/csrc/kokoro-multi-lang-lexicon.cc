@@ -7,10 +7,13 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,14 +50,25 @@ namespace sherpa_onnx {
 class KokoroMultiLangLexicon::Impl {
  private:
   enum class ChunkType {
-    kChinese,
-    kNonChinese,
-    kPunctuation,
+    kLatin,
+    kNonLatin,
   };
 
   struct TextChunk {
     std::string text;
-    ChunkType type = ChunkType::kNonChinese;
+    ChunkType type = ChunkType::kLatin;
+  };
+
+  struct LexiconSource {
+    std::string language;
+    std::string path;
+    std::function<std::vector<char>()> read;
+  };
+
+  struct LexiconData {
+    std::unordered_map<std::string, std::string> word2phonemes;
+    std::unordered_set<std::string> all_words;
+    int32_t max_phrase_len = 1;
   };
 
   // G2P implementations populate only text and phonemes. model_suffix holds
@@ -63,7 +77,7 @@ class KokoroMultiLangLexicon::Impl {
   // clause comma.
   struct G2pTerm {
     std::string text;
-    std::string phoneme;
+    std::string phonemes;
     std::string model_suffix;
 
     // True when this term was reconstructed from a gap between espeak's word
@@ -71,7 +85,7 @@ class KokoroMultiLangLexicon::Impl {
     //
     // For example, espeak may return only "record" and "doesn't" for the
     // source "record. doesn't". We reconstruct the missing period as
-    // {text: ".", phoneme: "."} and intentionally tokenize it for Kokoro.
+    // {text: ".", phonemes: "."} and intentionally tokenize it for Kokoro.
     // The flag records its origin so ApplyEspeakTerminator() can distinguish
     // such recovered punctuation from punctuation that espeak did emit.
     bool is_omitted_by_espeak = false;
@@ -90,7 +104,7 @@ class KokoroMultiLangLexicon::Impl {
       : meta_data_(meta_data), debug_(debug) {
     InitTokens(tokens);
 
-    InitLexicon(lexicon);
+    RegisterLexiconSources(lexicon);
 
     InitEspeak(data_dir);  // See ./piper-phonemize-lexicon.cc
   }
@@ -102,7 +116,7 @@ class KokoroMultiLangLexicon::Impl {
       : meta_data_(meta_data), debug_(debug) {
     InitTokens(mgr, tokens);
 
-    InitLexicon(mgr, lexicon);
+    RegisterLexiconSources(mgr, lexicon);
 
     // we assume you have copied data_dir from assets to some path
 
@@ -120,12 +134,14 @@ class KokoroMultiLangLexicon::Impl {
     std::vector<G2pSentence> g2p_sentences;
     for (const auto &chunk : text_chunks) {
       std::vector<G2pSentence> sentences;
-      if (chunk.type == ChunkType::kChinese) {
-        sentences = G2pChinese(chunk.text);
-      } else if (chunk.type == ChunkType::kPunctuation) {
-        sentences = G2pPunctuation(chunk.text);
+      if (chunk.type == ChunkType::kNonLatin) {
+        sentences = G2pWithSelectedLexicon(chunk.text, voice);
+      } else if (IsFullOfPunctuation(chunk.text)) {
+        G2pSentence sentence;
+        sentence.terms.push_back({chunk.text, chunk.text, ""});
+        sentences.push_back(std::move(sentence));
       } else {
-        sentences = G2pNonChinese(chunk.text, voice);
+        sentences = G2pWithEspeak(chunk.text, voice);
       }
       g2p_sentences.insert(g2p_sentences.end(),
                            std::make_move_iterator(sentences.begin()),
@@ -205,25 +221,36 @@ class KokoroMultiLangLexicon::Impl {
     return aliases;
   }
 
-  static bool IsFullWidthPunctuation(char32_t c) {
-    const auto &aliases = FullWidthPunctuationAliases();
-    return aliases.find(c) != aliases.end();
+  static bool IsLatinCodepoint(char32_t c) {
+    return
+        // Basic Latin uppercase letters: U+0041 ('A') through U+005A ('Z').
+        (c >= U'A' && c <= U'Z') ||
+        // Basic Latin lowercase letters: U+0061 ('a') through U+007A ('z').
+        (c >= U'a' && c <= U'z') ||
+        // Latin-1 Supplement and Latin Extended-B: U+00C0 through U+024F.
+        // Examples include 'À' (U+00C0), 'é' (U+00E9), 'Ā' (U+0100),
+        // 'č' (U+010D), 'Ǆ' (U+01C4), 'ȧ' (U+0227), and 'ɏ' (U+024F).
+        (c >= 0x00c0 && c <= 0x024f) ||
+        // Latin Extended Additional: U+1E00 through U+1EFF, containing
+        // further precomposed Latin letters with diacritics. Examples include
+        // 'Ḁ' (U+1E00), 'ḡ' (U+1E21), 'ṣ' (U+1E63), 'ẞ' (U+1E9E),
+        // 'ạ' (U+1EA1), 'ế' (U+1EBF), 'ệ' (U+1EC7), 'ố' (U+1ED1),
+        // and 'ỹ' (U+1EF9).
+        (c >= 0x1e00 && c <= 0x1eff);
   }
 
-  static char32_t NormalizedPunctuation(char32_t c) {
-    const auto &aliases = FullWidthPunctuationAliases();
-    auto iter = aliases.find(c);
-    // Return punctuation without a full-width/CJK alias unchanged.
-    return iter == aliases.end() ? c : iter->second;
+  static std::string BaseLanguage(const std::string &language) {
+    if (language == "ja-cutlet" || language == "ja-jtalk") {
+      return "ja";
+    }
+    return language;
   }
-
-  static bool IsHanCodepoint(char32_t c) { return c >= 0x4e00 && c <= 0x9fff; }
 
   std::vector<TextChunk> SplitTextIntoLanguageChunks(
       const std::string &text) const {
     std::vector<TextChunk> text_chunks;
     std::string current;
-    ChunkType current_type = ChunkType::kNonChinese;
+    ChunkType current_type = ChunkType::kLatin;
 
     auto flush_current = [&]() {
       if (!current.empty()) {
@@ -232,35 +259,17 @@ class KokoroMultiLangLexicon::Impl {
       }
     };
 
-    // Utf8ToUtf32: Decode UTF-8 once because punctuation aliases and Han ranges are Unicode
-    // codepoint properties, not byte properties. Iterating std::string bytes
-    // would split every non-ASCII character into multiple values.
+    // Decode UTF-8 once because the Latin ranges are Unicode codepoint
+    // properties, not byte properties. Iterating std::string bytes would
+    // split every non-ASCII character into multiple values.
     for (char32_t c : Utf8ToUtf32(text)) {
-      // Retain the written full-width punctuation. Keep it in a separate chunk
-      // so G2pPunctuation() can normalize its phoneme and bypass
-      // language-specific G2P. Each codepoint remains one model token; the
-      // shared packing stage can merge adjacent punctuation sentences.
-      if (IsFullWidthPunctuation(c)) {
-        flush_current(); // flush the preceding chars first
-        text_chunks.push_back({Utf32ToUtf8(c), ChunkType::kPunctuation}); // flush current punctuation
-        continue;
-      }
-
-      // This is the current frontend route, not a complete language detector.
-      // Han is shared by Chinese and Japanese; Japanese support must make this
-      // decision from the requested language and surrounding kana/context.
-      //
-      //
-      // space            U+0020  -> kNonChinese
-      // tab              U+0009  -> kNonChinese
-      // newline          U+000A  -> kNonChinese
-      // carriage return  U+000D  -> kNonChinese
-      // For example: "中国 \tEnglish\r\n世界"
-      // ["中国"       kChinese]
-      // [" \tEnglish\r\n" kNonChinese]
-      // ["世界"       kChinese]
+      bool is_latin =
+          IsLatinCodepoint(c) ||
+          (c <= 0x7f &&
+           (std::isspace(static_cast<unsigned char>(c)) ||
+            std::ispunct(static_cast<unsigned char>(c))));
       ChunkType type =
-          IsHanCodepoint(c) ? ChunkType::kChinese : ChunkType::kNonChinese;
+          is_latin ? ChunkType::kLatin : ChunkType::kNonLatin;
       if (!current.empty() && type != current_type) {
         flush_current();
       }
@@ -276,10 +285,8 @@ class KokoroMultiLangLexicon::Impl {
       }
       SHERPA_ONNX_LOGE("After language chunking:\n%s", chunked_text.c_str());
       for (const auto &chunk : text_chunks) {
-        const char *type = chunk.type == ChunkType::kChinese ? "Chinese"
-                           : chunk.type == ChunkType::kPunctuation
-                               ? "Punctuation"
-                               : "Non-Chinese";
+        const char *type =
+            chunk.type == ChunkType::kLatin ? "Latin" : "NonLatin";
         SHERPA_ONNX_LOGE("%s: %s", type, chunk.text.c_str());
       }
     }
@@ -289,16 +296,18 @@ class KokoroMultiLangLexicon::Impl {
 
   bool HasUnsegmentedScript(const std::string &text,
                             const std::string &voice = "") const {
-    if (voice.rfind("ja", 0) == 0 || voice.rfind("th", 0) == 0 ||
-        voice.rfind("lo", 0) == 0 || voice.rfind("my", 0) == 0 ||
-        voice.rfind("km", 0) == 0) {
+    std::string language = BaseLanguage(voice);
+    if (language.rfind("th", 0) == 0 || language.rfind("lo", 0) == 0 ||
+        language.rfind("my", 0) == 0 ||
+        language.rfind("km", 0) == 0) {
       return true;
     }
     for (char32_t c : Utf8ToUtf32(text)) {
-      // Hiragana, Katakana, Thai, Lao, Myanmar, and Khmer need a word
-      // segmenter that this frontend does not provide. Audio generation still
+      // Kana is segmented only when Japanese is selected. Thai, Lao, Myanmar,
+      // and Khmer do not have a word segmenter in this frontend. Audio still
       // uses the normal frontend output, but term alignments are suppressed.
-      if ((c >= 0x3040 && c <= 0x30ff) || (c >= 0x0e00 && c <= 0x0eff) ||
+      if ((language != "ja" && c >= 0x3040 && c <= 0x30ff) ||
+          (c >= 0x0e00 && c <= 0x0eff) ||
           (c >= 0x1000 && c <= 0x109f) || (c >= 0x1780 && c <= 0x17ff)) {
         return true;
       }
@@ -308,13 +317,13 @@ class KokoroMultiLangLexicon::Impl {
 
   std::string IdsToPhoneme(const std::vector<int64_t> &ids) const {
     std::string ans;
-    int32_t space_id = token2id_.at(" ");
     size_t begin = 0;
     size_t end = ids.size();
+    int32_t space_id = token2id_.at(" ");
     while (begin < end && ids[begin] == space_id) {
       ++begin;
     }
-    while (end > 0 && ids[end - 1] == space_id) {
+    while (end > begin && ids[end - 1] == space_id) {
       --end;
     }
     for (size_t i = begin; i != end; ++i) {
@@ -339,6 +348,35 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
+  // A G2P sentence is a sequence of logical terms, but Kokoro accepts only a
+  // bounded number of token IDs per model invocation.  The bound must be
+  // applied after tokenization: a short written phrase can expand to many
+  // phoneme IDs, and an espeak term can also carry model-only suffix IDs (for
+  // example, the separator space after a word).
+  //
+  // PackTerms() first groups complete terms while their combined token IDs fit
+  // in the content budget.  For example, with max_content == 5, terms whose
+  // IDs have lengths 2, 3, and 2 become two model sentences:
+  //
+  //   [term-1 (2 IDs), term-2 (3 IDs)]  [term-3 (2 IDs)]
+  //
+  // MakeSentence() then adds the BOS/EOS IDs around each group.  Keeping those
+  // wrappers at the sentence level is important because every packed unit is
+  // sent to Kokoro independently.
+  //
+  // A single term can be larger than the budget.  Such a term is split by
+  // token-ID position; for example, seven IDs with max_content == 5 become
+  // [first five IDs] and [last two IDs], each with its own BOS/EOS pair.  The
+  // fragment keeps the original written text, while its
+  // num_phoneme_tokens/inferred_phonemes fields are clipped to the fragment's
+  // leading phoneme IDs.  Any trailing model-only suffix remains tokenized but
+  // is excluded from the fragment's public phoneme alignment.
+  //
+  // Splitting at this stage also preserves the duration-alignment contract:
+  // InferTermAlignments() can account for each fragment's phoneme IDs and
+  // suffix IDs separately.  TokenizePackAndMerge() may combine short packed
+  // sentences later when the combined sequence still fits, but it cannot
+  // safely replace this initial budget enforcement.
   std::vector<SplitSentence> PackTerms(std::vector<Term> terms) const {
     std::vector<SplitSentence> ans;
     std::vector<Term> current;
@@ -371,6 +409,7 @@ class KokoroMultiLangLexicon::Impl {
         size_t end = std::min(begin + max_content, ids.size());
         Term fragment;
         fragment.text = term.text;
+        fragment.raw_phonemes = term.raw_phonemes;
         fragment.token_ids.tokens.assign(ids.begin() + begin,
                                          ids.begin() + end);
         size_t phoneme_begin =
@@ -379,7 +418,7 @@ class KokoroMultiLangLexicon::Impl {
             std::min(end, static_cast<size_t>(term.num_phoneme_tokens));
         fragment.num_phoneme_tokens =
             static_cast<int32_t>(phoneme_end - phoneme_begin);
-        fragment.phoneme = IdsToPhoneme(std::vector<int64_t>(
+        fragment.inferred_phonemes = IdsToPhoneme(std::vector<int64_t>(
             fragment.token_ids.tokens.begin(),
             fragment.token_ids.tokens.begin() + fragment.num_phoneme_tokens));
         ans.push_back(MakeSentence({std::move(fragment)}));
@@ -409,9 +448,10 @@ class KokoroMultiLangLexicon::Impl {
   Term TokenizeTerm(G2pTerm g2p_term) const {
     Term term;
     term.text = std::move(g2p_term.text);
+    term.raw_phonemes = std::move(g2p_term.phonemes);
 
-    auto phoneme_ids = TokenizePhonemes(g2p_term.phoneme, term.text);
-    term.phoneme = IdsToPhoneme(phoneme_ids);
+    auto phoneme_ids = TokenizePhonemes(term.raw_phonemes, term.text);
+    term.inferred_phonemes = IdsToPhoneme(phoneme_ids);
     term.num_phoneme_tokens = static_cast<int32_t>(phoneme_ids.size());
 
     // Tokenize recovered punctuation too. Written input such as
@@ -472,7 +512,7 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
-  bool IsPunctuation(const std::string &text) const {
+  bool IsFullOfPunctuation(const std::string &text) const {
     auto codepoints = Utf8ToUtf32(text);
     if (codepoints.empty()) {
       return false;
@@ -485,95 +525,44 @@ class KokoroMultiLangLexicon::Impl {
     });
   }
 
-  std::vector<G2pSentence> G2pPunctuation(const std::string &text) const {
-    std::string phoneme;
-    for (char32_t c : Utf8ToUtf32(text)) {
-      phoneme += Utf32ToUtf8(NormalizedPunctuation(c));
-    }
-
-    G2pSentence sentence;
-    sentence.terms.push_back({text, std::move(phoneme), ""});
-    std::vector<G2pSentence> ans;
-    ans.push_back(std::move(sentence));
-    return ans;
-  }
-
-  std::vector<std::string> SplitWrittenTerms(const std::string &text) const {
-    std::vector<std::string> ans;
-    std::string current;
-    auto flush = [&]() {
-      if (!current.empty()) {
-        ans.push_back(std::move(current));
-        current.clear();
-      }
-    };
-
-    auto codepoints = Utf8ToUtf32(text);
-    auto is_space = [](char32_t c) {
-      return c <= 0x7f && std::isspace(static_cast<unsigned char>(c));
-    };
-    auto is_punctuation = [this](char32_t c) {
-      std::string s = Utf32ToUtf8(c);
-      bool is_ascii = c <= 0x7f && std::ispunct(static_cast<unsigned char>(c));
-      bool is_unicode =
-          (c >= 0x0600 && c <= 0x061f) || (c >= 0x066a && c <= 0x066d) ||
-          (c >= 0x2000 && c <= 0x206f) || (c >= 0x2e00 && c <= 0x2e7f) ||
-          (c >= 0x3000 && c <= 0x303f) || (c >= 0xff00 && c <= 0xff65);
-      return IsPunctuation(s) || is_ascii || is_unicode;
-    };
-
-    for (size_t i = 0; i != codepoints.size(); ++i) {
-      char32_t c = codepoints[i];
-      std::string s = Utf32ToUtf8(c);
-      bool punctuation = is_punctuation(c);
-      if ((c == U'\'' || c == 0x2019) && !current.empty() &&
-          i + 1 < codepoints.size() && !is_space(codepoints[i + 1]) &&
-          !is_punctuation(codepoints[i + 1])) {
-        punctuation = false;
-      }
-
-      if (is_space(c)) {
-        flush();
-      } else if (punctuation) {
-        flush();
-        ans.push_back(std::move(s));
-      } else {
-        current += s;
-      }
-    }
-    flush();
-    return ans;
-  }
-
-  std::vector<int32_t> ConvertWordToIds(const std::string &w) const {
-    std::vector<int32_t> ans;
-    if (word2ids_.count(w)) {
-      ans = word2ids_.at(w);
+  std::string ConvertWordToPhonemes(const std::string &w,
+                                    const LexiconData &data) const {
+    std::string ans;
+    auto iter = data.word2phonemes.find(w);
+    if (iter != data.word2phonemes.end()) {
+      ans = iter->second;
+    } else if (token2id_.count(w)) {
+      // For some punctuation existing in the token2id_, we directly use the w itself as the phoneme
+      ans = w;
     } else {
       std::vector<std::string> words = SplitUtf8(w);
       for (const auto &word : words) {
-        if (word2ids_.count(word)) {
-          auto ids = ConvertWordToIds(word);
-          ans.insert(ans.end(), ids.begin(), ids.end());
+        auto word_iter = data.word2phonemes.find(word);
+        if (word_iter != data.word2phonemes.end()) {
+          ans += word_iter->second;
+        } else if (token2id_.count(word)) {
+          ans += word;
         } else {
-          if (debug_) {
-            SHERPA_ONNX_LOGE("Skip OOV: '%s'", word.c_str());
-          }
+#if __OHOS__
+          SHERPA_ONNX_LOGE(
+              "Warning: No lexicon entry or model token for '%{public}s' "
+              "while converting lexicon chunk '%{public}s'. Ignore it.",
+              word.c_str(), w.c_str());
+#else
+          SHERPA_ONNX_LOGE(
+              "Warning: No lexicon entry or model token for '%s' while "
+              "converting lexicon chunk '%s'. Ignore it.",
+              word.c_str(), w.c_str());
+#endif
         }
       }
     }
 
     if (debug_ && !ans.empty()) {
-      std::ostringstream os;
-      os << w << ": ";
-      for (auto i : ans) {
-        os << id2token_.at(i) << " ";
-      }
-      os << "\n";
 #if __OHOS__
-      SHERPA_ONNX_LOGE("%{public}s", os.str().c_str());
+      SHERPA_ONNX_LOGE("%{public}s: %{public}s", w.c_str(), ans.c_str());
 #else
-      SHERPA_ONNX_LOGE("%s", os.str().c_str());
+      SHERPA_ONNX_LOGE("%s: %s", w.c_str(), ans.c_str());
 #endif
     }
 
@@ -589,22 +578,23 @@ class KokoroMultiLangLexicon::Impl {
     return ans;
   }
 
-  bool SplitChineseWithIcu(const std::string &text,
-                           std::vector<std::string> *words) const {
+  bool SplitWithIcu(const std::string &text, const std::string &language,
+                    std::vector<std::string> *words) const {
     UErrorCode status = U_ZERO_ERROR;
     std::unique_ptr<icu::BreakIterator> break_iterator(
-        icu::BreakIterator::createWordInstance(icu::Locale("zh"), status));
+        icu::BreakIterator::createWordInstance(icu::Locale(language.c_str()),
+                                               status));
     if (U_FAILURE(status) || !break_iterator) {
 #if __OHOS__
       SHERPA_ONNX_LOGE(
-          "Failed to create ICU Chinese word iterator: %{public}s. "
+          "Failed to create ICU %{public}s word iterator: %{public}s. "
           "Fall back to PhraseMatcher.",
-          u_errorName(status));
+          language.c_str(), u_errorName(status));
 #else
       SHERPA_ONNX_LOGE(
-          "Failed to create ICU Chinese word iterator: %s. "
+          "Failed to create ICU %s word iterator: %s. "
           "Fall back to PhraseMatcher.",
-          u_errorName(status));
+          language.c_str(), u_errorName(status));
 #endif
       return false;
     }
@@ -631,19 +621,22 @@ class KokoroMultiLangLexicon::Impl {
     return true;
   }
 
-  std::vector<G2pSentence> G2pChinese(const std::string &text) const {
+  std::vector<G2pSentence> G2pSegmentedLexicon(
+      const std::string &text, const std::string &language,
+      const LexiconData &data) const {
     // ICU supplies the written term boundaries. A term uses its exact lexicon
-    // pronunciation when present; ConvertWordToIds() otherwise composes the
-    // pronunciation from single-character entries without greedy sub-phrase
-    // matching.
+    // pronunciation when present; ConvertWordToPhonemes() otherwise composes
+    // the pronunciation from single-character entries without greedy
+    // sub-phrase matching.
     std::vector<std::string> words;
-    bool used_icu = SplitChineseWithIcu(text, &words);
+    bool used_icu = SplitWithIcu(text, language, &words);
     if (!used_icu) {
       // Preserve the previous behavior if ICU cannot load its word iterator
       // or dictionary data: greedily match the longest lexicon phrases, then
       // fall back to individual UTF-8 characters.
       auto characters = SplitUtf8(text);
-      PhraseMatcher matcher(&all_words_, characters, debug_);
+      PhraseMatcher matcher(&data.all_words, characters, debug_,
+                            data.max_phrase_len);
       words.assign(matcher.begin(), matcher.end());
     }
 
@@ -655,32 +648,35 @@ class KokoroMultiLangLexicon::Impl {
         sep = "_";
       }
 #if __OHOS__
-      SHERPA_ONNX_LOGE("After %{public}s Chinese segmentation:\n%{public}s",
-                       used_icu ? "ICU" : "fallback greedy", os.str().c_str());
+      SHERPA_ONNX_LOGE(
+          "After %{public}s %{public}s segmentation:\n%{public}s",
+          used_icu ? "ICU" : "fallback greedy", language.c_str(),
+          os.str().c_str());
 #else
-      SHERPA_ONNX_LOGE("After %s Chinese segmentation:\n%s",
-                       used_icu ? "ICU" : "fallback greedy", os.str().c_str());
+      SHERPA_ONNX_LOGE("After %s %s segmentation:\n%s",
+                       used_icu ? "ICU" : "fallback greedy",
+                       language.c_str(), os.str().c_str());
 #endif
     }
 
     G2pSentence sentence;
     for (const std::string &word : words) {
-      auto ids = ConvertWordToIds(word);
-      if (ids.empty()) {
+      std::string phonemes = ConvertWordToPhonemes(word, data);
+      if (phonemes.empty()) {
 #if __OHOS__
-        SHERPA_ONNX_LOGE("Ignore OOV '%{public}s'", word.c_str());
+        SHERPA_ONNX_LOGE(
+            "Warning: Empty pronunciation for lexicon term '%{public}s'.",
+            word.c_str());
 #else
-        SHERPA_ONNX_LOGE("Ignore OOV '%s'", word.c_str());
+        SHERPA_ONNX_LOGE(
+            "Warning: Empty pronunciation for lexicon term '%s'.",
+            word.c_str());
 #endif
-        continue;
       }
 
       G2pTerm term;
       term.text = word;
-      // The lexicon is stored as token IDs, so convert its pronunciation back
-      // to phonemes here. The shared stage tokenizes it after all languages
-      // have finished G2P.
-      term.phoneme = IdsToPhoneme(std::vector<int64_t>(ids.begin(), ids.end()));
+      term.phonemes = std::move(phonemes);
       sentence.terms.push_back(std::move(term));
     }
 
@@ -751,7 +747,7 @@ class KokoroMultiLangLexicon::Impl {
       if (target == sentence->terms.size()) {
         for (size_t i = gap_term_begin; i != sentence->terms.size(); ++i) {
           if (sentence->terms[i].is_omitted_by_espeak &&
-              IsPunctuation(sentence->terms[i].text)) {
+              IsFullOfPunctuation(sentence->terms[i].text)) {
             target = i;
             break;
           }
@@ -763,7 +759,7 @@ class KokoroMultiLangLexicon::Impl {
       }
 
       auto &term = sentence->terms[target];
-      term.phoneme = punctuation_text;
+      term.phonemes = punctuation_text;
       // This source-gap term corresponds to the terminator espeak did emit,
       // so it is no longer classified as omitted. Other punctuation in the
       // same gap remains marked as recovered and is still tokenized normally.
@@ -776,10 +772,10 @@ class KokoroMultiLangLexicon::Impl {
     return (terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE;
   }
 
-  std::vector<G2pSentence> G2pNonChineseWithEspeak(
+  std::vector<G2pSentence> G2pWithEspeak(
       const std::string &text, const std::string &voice) const {
     piper::eSpeakPhonemeConfig config;
-    config.voice = voice;
+    config.voice = BaseLanguage(voice);
 
     std::vector<EspeakClausePhonemes> clauses;
     if (!CallPhonemizeEspeakWithWordPhonemes(text, config, &clauses)) {
@@ -815,7 +811,7 @@ class KokoroMultiLangLexicon::Impl {
 
         G2pTerm term;
         term.text = word.text;
-        term.phoneme = PhonemesToString(word.phonemes);
+        term.phonemes = PhonemesToString(word.phonemes);
         if (i + 1 != clause.words.size()) {
           // espeak's flat clause output contains one space between adjacent
           // word pairs. Keep it in model input without exposing it as part of
@@ -858,91 +854,30 @@ class KokoroMultiLangLexicon::Impl {
       for (const auto &group : ans) {
         for (const auto &term : group.terms) {
           SHERPA_ONNX_LOGE("G2P term '%s': %s", term.text.c_str(),
-                           term.phoneme.c_str());
+                           term.phonemes.c_str());
         }
       }
     }
     return ans;
   }
 
-  std::vector<G2pSentence> G2pNonChineseWithoutVoice(
-      const std::string &text) const {
-    // Preserve the legacy no-voice behavior: use the lexicon first and invoke
-    // espeak only for an OOV word.
-    std::vector<std::string> words = SplitWrittenTerms(text);
-    if (debug_) {
-      std::ostringstream os;
-      os << "After splitting to words: ";
-      std::string sep;
-      for (const auto &word : words) {
-        os << sep << word;
-        sep = "_";
-      }
-      SHERPA_ONNX_LOGE("%s", os.str().c_str());
+  std::vector<G2pSentence> G2pWithSelectedLexicon(
+      const std::string &text, const std::string &language) const {
+    if (language != "cmn" && language != "ja-cutlet" &&
+        language != "ja-jtalk") {
+      throw std::runtime_error(
+          "Kokoro lexicon G2P is not supported for language '" +
+          language + "'.");
     }
 
-    std::vector<G2pSentence> ans;
-    G2pSentence sentence;
-    auto flush = [&]() {
-      if (!sentence.terms.empty()) {
-        ans.push_back(std::move(sentence));
-        sentence = {};
-      }
-    };
-
-    for (const auto &written_word : words) {
-      auto word = ToLowerCase(written_word);
-      G2pTerm term;
-      term.text = written_word;
-
-      if (IsPunctuation(word)) {
-        term.phoneme = word;
-        sentence.terms.push_back(std::move(term));
-        if (word == "." || word == "!" || word == "?" || word == ";") {
-          flush();
-        }
-        continue;
-      }
-
-      if (word2ids_.count(word)) {
-        const auto &ids = word2ids_.at(word);
-        term.phoneme =
-            IdsToPhoneme(std::vector<int64_t>(ids.begin(), ids.end()));
-      } else {
-        if (debug_) {
-          SHERPA_ONNX_LOGE("Use espeak-ng to handle the OOV: '%s'",
-                           word.c_str());
-        }
-
-        piper::eSpeakPhonemeConfig config;
-        config.voice = meta_data_.voice;
-        std::vector<std::vector<piper::Phoneme>> phoneme_groups;
-        CallPhonemizeEspeak(word, config, &phoneme_groups);
-        for (const auto &phonemes : phoneme_groups) {
-          term.phoneme += PhonemesToString(phonemes);
-        }
-      }
-
-      // This path historically placed a space after every word, regardless of
-      // whether its pronunciation came from the lexicon or espeak.
-      term.model_suffix = " ";
-      sentence.terms.push_back(std::move(term));
+    auto data = GetLexiconData(language);
+    if (!data) {
+      throw std::runtime_error(
+          "No Kokoro lexicon is configured for language '" +
+          language + "'.");
     }
 
-    flush();
-    return ans;
-  }
-
-  std::vector<G2pSentence> G2pNonChinese(const std::string &text,
-                                         const std::string &voice) const {
-    if (IsPunctuation(text)) {
-      return G2pPunctuation(text);
-    }
-
-    if (!voice.empty()) {
-      return G2pNonChineseWithEspeak(text, voice);
-    }
-    return G2pNonChineseWithoutVoice(text);
+    return G2pSegmentedLexicon(text, BaseLanguage(language), *data);
   }
 
   void InitTokens(const std::string &tokens) {
@@ -965,6 +900,16 @@ class KokoroMultiLangLexicon::Impl {
       id2token_[p.second] = p.first;
     }
 
+    // Register full-width and CJK punctuation as aliases of the model's
+    // canonical punctuation tokens. id2token_ remains canonical so public
+    // phoneme strings use the spelling from tokens.txt.
+    for (const auto &[alias, canonical] : FullWidthPunctuationAliases()) {
+      auto iter = token2id_.find(Utf32ToUtf8(canonical));
+      if (iter != token2id_.end()) {
+        token2id_[Utf32ToUtf8(alias)] = iter->second;
+      }
+    }
+
     std::u32string s;
     for (const auto &p : token2id_) {
       s = Utf8ToUtf32(p.first);
@@ -980,36 +925,77 @@ class KokoroMultiLangLexicon::Impl {
     }
   }
 
-  void InitLexicon(const std::string &lexicon) {
+  static std::string GetLexiconLanguage(const std::string &path) {
+    static const std::map<std::string, std::string> filenames = {
+        {"en-us", "lexicon-us-en.txt"},
+        {"en-gb", "lexicon-gb-en.txt"},
+        {"cmn", "lexicon-cmn.txt"},
+        {"ja-cutlet", "lexicon-ja-cutlet.txt"},
+        {"ja-jtalk", "lexicon-ja-jtalk.txt"},
+    };
+
+    // extract the filename from the parameter path
+    size_t pos = path.find_last_of("/\\");
+    std::string name =
+        pos == std::string::npos ? path : path.substr(pos + 1);
+
+    for (const auto &[key, filename] : filenames) {
+      if (name == filename) {
+        return key;
+      }
+    }
+
+    throw std::invalid_argument(
+        "Unsupported Kokoro lexicon filename '" + name + "'.");
+  }
+
+  void RegisterSource(std::string language, std::string path,
+                      std::function<std::vector<char>()> reader) {
+    LexiconSource source;
+    source.language = std::move(language);
+    source.path = std::move(path);
+    source.read = std::move(reader);
+
+    lexicon_sources_[source.language].push_back(std::move(source));
+  }
+
+  void RegisterLexiconSources(const std::string &lexicon) {
     if (lexicon.empty()) {
       return;
     }
 
     std::vector<std::string> files;
     SplitStringToVector(lexicon, ",", false, &files);
-    for (const auto &f : files) {
-      auto is = OpenInputFile(f);
-      InitLexicon(is);
+    for (const auto &path : files) {
+      std::string language = GetLexiconLanguage(path);
+      if (!FileExists(path)) {
+        throw std::runtime_error("Kokoro lexicon does not exist: '" +
+                                 path + "'.");
+      }
+      RegisterSource(std::move(language), path,
+                     [path]() { return ReadFile(path); });
     }
   }
 
   template <typename Manager>
-  void InitLexicon(Manager *mgr, const std::string &lexicon) {
+  void RegisterLexiconSources(Manager *mgr, const std::string &lexicon) {
     if (lexicon.empty()) {
       return;
     }
 
     std::vector<std::string> files;
     SplitStringToVector(lexicon, ",", false, &files);
-    for (const auto &f : files) {
-      auto buf = ReadFile(mgr, f);
-
-      std::istringstream is(std::string(buf.data(), buf.size()));
-      InitLexicon(is);
+    for (const auto &path : files) {
+      std::string language = GetLexiconLanguage(path);
+      RegisterSource(std::move(language), path,
+                     [mgr, path]() { return ReadFile(mgr, path); });
     }
   }
 
-  void InitLexicon(std::istream &is) {
+  std::shared_ptr<LexiconData> ParseLexicon(
+      const LexiconSource &source, const std::vector<char> &buffer) const {
+    auto data = std::make_shared<LexiconData>();
+    std::istringstream is(std::string(buffer.data(), buffer.size()));
     std::string word;
     std::vector<std::string> token_list;
     std::string token;
@@ -1019,13 +1005,36 @@ class KokoroMultiLangLexicon::Impl {
     int32_t num_warn = 0;
     while (std::getline(is, line)) {
       ++line_num;
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.empty() || line[0] == '#') {
+        continue;
+      }
+
+      // Each lexicon line is whitespace-delimited: the first field is the
+      // written word and every remaining field is one phoneme token. For
+      // example, the line
+      //
+      //   東京 t oː kʲ oː
+      //
+      // gives `word == "東京"` and token_list == {"t", "oː", "kʲ",
+      // "oː"}. `operator>>` skips spaces and tabs, so the first extraction
+      // distinguishes the word by position; the loop extracts the rest.
+      // A literal phoneme-space cannot be represented by ordinary
+      // whitespace, so generated lexicons write it as `<space>` and it is
+      // converted back to " " below.
       std::istringstream iss(line);
 
       token_list.clear();
+      word.clear();
+      // extracts the first field as word
       iss >> word;
-      ToLowerCase(&word);
+      if (word.empty()) {
+        continue;
+      }
 
-      if (word2ids_.count(word)) {
+      if (data->word2phonemes.count(word)) {
         num_warn += 1;
         if (num_warn < 10) {
           SHERPA_ONNX_LOGE("Duplicated word: %s at line %d:%s. Ignore it.",
@@ -1034,33 +1043,104 @@ class KokoroMultiLangLexicon::Impl {
         continue;
       }
 
+      // the while loop extracts the rest remaining whitespace-delimited field
       while (iss >> token) {
+        if (token == "<space>") {
+          token = " ";
+        }
         token_list.push_back(std::move(token));
       }
 
-      std::vector<int32_t> ids = ConvertTokensToIds(token2id_, token_list);
+      std::string phonemes;
+      for (const auto &t : token_list) {
+        phonemes += t;
+      }
 
-      if (ids.empty() && word != "呣") {
+      if (phonemes.empty() && word != "呣") {
         SHERPA_ONNX_LOGE(
             "Invalid pronunciation for word '%s' at line %d:%s. Ignore it",
             word.c_str(), line_num, line.c_str());
         continue;
       }
 
-      word2ids_.insert({std::move(word), std::move(ids)});
+      data->max_phrase_len = std::max<int32_t>(
+          data->max_phrase_len,
+          static_cast<int32_t>(Utf8ToUtf32(word).size()));
+      data->word2phonemes.emplace(std::move(word), std::move(phonemes));
     }
 
-    for (const auto &[key, _] : word2ids_) {
-      all_words_.insert(key);
+    if (data->word2phonemes.empty()) {
+      throw std::runtime_error("Kokoro lexicon '" + source.path +
+                               "' contains no valid entries.");
     }
+    for (const auto &[key, _] : data->word2phonemes) {
+      data->all_words.insert(key);
+    }
+    return data;
+  }
+
+  std::shared_ptr<const LexiconData> GetLexiconData(
+      const std::string &language) const {
+    auto source_iter = lexicon_sources_.find(language);
+    if (source_iter == lexicon_sources_.end()) {
+      return {};
+    }
+
+    std::lock_guard<std::mutex> lock(lexicon_mutex_);
+    auto loaded_iter = loaded_lexicons_.find(language);
+    if (loaded_iter != loaded_lexicons_.end()) {
+      return loaded_iter->second;
+    }
+
+    auto combined = std::make_shared<LexiconData>();
+    for (const auto &source : source_iter->second) {
+      std::vector<char> buffer = source.read();
+      if (buffer.empty()) {
+        throw std::runtime_error("Failed to read Kokoro lexicon '" +
+                                 source.path + "'.");
+      }
+
+      auto parsed = ParseLexicon(source, buffer);
+
+      for (auto &[key, phonemes] : parsed->word2phonemes) {
+        if (!combined->word2phonemes.emplace(key, std::move(phonemes))
+                 .second) {
+          SHERPA_ONNX_LOGE(
+              "Duplicated word '%s' in Kokoro language '%s'. Ignore it.",
+              key.c_str(), language.c_str());
+        }
+      }
+      combined->max_phrase_len =
+          std::max(combined->max_phrase_len, parsed->max_phrase_len);
+    }
+
+    if (combined->word2phonemes.empty()) {
+      throw std::runtime_error(
+          "No usable Kokoro lexicon entries for language '" + language +
+          "'.");
+    }
+    for (const auto &[key, _] : combined->word2phonemes) {
+      combined->all_words.insert(key);
+    }
+
+    loaded_lexicons_[language] = combined;
+    return combined;
   }
 
  private:
   OfflineTtsKokoroModelMetaData meta_data_;
 
-  // word to token IDs
-  std::unordered_map<std::string, std::vector<int32_t>> word2ids_;
-  std::unordered_set<std::string> all_words_;
+  // Lightweight source descriptors keyed by language. Initialization records
+  // only paths and deferred readers; it does not read or parse lexicon files.
+  std::unordered_map<std::string, std::vector<LexiconSource>> lexicon_sources_;
+
+  // Parsed lexicons cached by language after their first use. GetLexiconData()
+  // populates this map under lexicon_mutex_, so lexicons for unused languages
+  // remain unopened and consume no entry-map memory.
+  mutable std::unordered_map<std::string,
+                             std::shared_ptr<const LexiconData>>
+      loaded_lexicons_;
+  mutable std::mutex lexicon_mutex_;
 
   // tokens.txt is saved in token2id_
   std::unordered_map<std::string, int32_t> token2id_;

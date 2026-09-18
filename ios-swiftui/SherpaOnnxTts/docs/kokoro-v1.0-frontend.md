@@ -24,7 +24,7 @@ sequenceDiagram
     participant FE as KokoroMultiLangLexicon (kokoro-multi-lang-lexicon.cc)
     participant NORM as Punctuation router
     participant ROUTE as Chinese / non-Chinese splitter
-    participant ZH as Chinese path (ICU word break · lexicon-zh.txt)
+    participant ZH as Chinese path (ICU word break · lexicon-cmn.txt)
     participant EN as Non-Chinese path (en / gb lexicon)
     participant ESP as espeak-ng G2P (piper-phonemize-lexicon.cc)
   end
@@ -68,7 +68,7 @@ sequenceDiagram
 2. **Context before the call — FST normalization** — if rule FSTs are configured (`date-zh.fst`, `phone-zh.fst`, `number-zh.fst`), `Generate` runs each of them in order via `kaldifst::TextNormalizer::Normalize` before the frontend. The normalizer converts the input string into a linear FST, composes it with the rule FST (`fst::Compose`), takes the best path (`fst::ShortestPath`), and writes back the output labels (dropping zero-padding bytes). The rule FSTs are string-rewriting transducers: `number-zh.fst` expands digits to their spoken Chinese reading (illustrative: `123` → `一百二十三`), `date-zh.fst` expands dates (illustrative: `2026年8月13日` → `二零二六年八月十三日`), and `phone-zh.fst` handles phone numbers. Anything a rule does not cover passes through unchanged — which is why the two example texts below, containing no digits, dates, or phone numbers, are unchanged by this step.
 3. **Punctuation handling** — `ConvertTextToTokenIds` keeps each mapped full-width/CJK punctuation codepoint as an independent, language-neutral chunk and converts only its phoneme to a supported Kokoro symbol. Paired CJK marks map to directional quotes, `・` maps to space, and full-width `－` maps to `—`. General-purpose `-`, `–`, `—`, and `…` remain in non-Chinese text so eSpeak retains their surrounding context. A punctuation-only run naturally isolated between Chinese chunks, such as `……`, still maps directly to its two supported punctuation tokens. Chunking preserves all original whitespace exactly.
 4. **Language routing** — the text is split into Chinese runs (`[一-龥]+`), non-Chinese runs, and language-neutral punctuation chunks.
-5. **Chinese path** — `G2pChinese` converts each Chinese run to an ICU `UnicodeString` and uses a `zh` word `BreakIterator`. With ICU 78.3, `中國人民不信邪也不怕邪` becomes `"中國" → "人民" → "不信邪" → "也" → "不怕" → "邪"`; these written segments become the alignment terms. `ConvertWordToIds` first looks up the complete ICU term in `word2ids_` (populated from `lexicon-zh.txt`). If the complete term is absent, it splits only that term into UTF-8 characters and concatenates each character's pronunciation in order; it does not greedily match smaller multi-character phrases. Unmatched characters are skipped as OOV. If ICU cannot create its word iterator, this path logs the ICU error and falls back to the previous `SplitUtf8` plus `PhraseMatcher` behavior.
+5. **Chinese path** — `G2pChinese` converts each Chinese run to an ICU `UnicodeString` and uses a `cmn` word `BreakIterator`. With ICU 78.3, `中國人民不信邪也不怕邪` becomes `"中國" → "人民" → "不信邪" → "也" → "不怕" → "邪"`; these written segments become the alignment terms. `ConvertWordToIds` first looks up the complete ICU term in `word2ids_` (populated from `lexicon-cmn.txt`). If the complete term is absent, it splits only that term into UTF-8 characters and concatenates each character's pronunciation in order; it does not greedily match smaller multi-character phrases. Unmatched characters are skipped as OOV. If ICU cannot create its word iterator, this path logs the ICU error and falls back to the previous `SplitUtf8` plus `PhraseMatcher` behavior.
 6. **Non-Chinese path** — `ConvertNonChineseToTokenIDs`:
    - voice non-empty (shipped default `en-us`) → `ConvertTextToTokenIDsWithEspeak`, which calls `ConvertTextToTokenIdsKokoroOrKitten` (espeak-ng phonemize → Kokoro phoneme → token IDs, chunked by `max_token_len`);
    - voice empty → word-split and look up `word2ids_` (`lexicon-us-en.txt` / `lexicon-gb-en.txt`), with per-word `CallPhonemizeEspeak` fallback for OOV.
@@ -82,7 +82,7 @@ sequenceDiagram
 | Data | Used for |
 |---|---|
 | ICU 78+ word-break rules and CJK dictionary | Chinese term segmentation; cross-platform builds provide the target ICU installation through `ICU_ROOT` |
-| `lexicon-zh.txt` | Chinese phrase/character → phoneme lookup (`word2ids_`) |
+| `lexicon-cmn.txt` | Chinese phrase/character → phoneme lookup (`word2ids_`) |
 | `lexicon-us-en.txt`, `lexicon-gb-en.txt` | English word → phoneme lookup, only when voice is empty |
 | `espeak-ng-data` | espeak-ng G2P (non-Chinese default, and OOV fallback) |
 | `tokens.txt` | phoneme/symbol → numeric token ID |
@@ -90,7 +90,7 @@ sequenceDiagram
 
 ## Worked examples (CN / EN) after each step
 
-All phoneme and token-ID values below are illustrative (simplified); the real outputs come from `lexicon-zh.txt`, espeak-ng, and `tokens.txt`.
+All phoneme and token-ID values below are illustrative (simplified); the real outputs come from `lexicon-cmn.txt`, espeak-ng, and `tokens.txt`.
 
 | Step | CN example | EN example |
 |---|---|---|

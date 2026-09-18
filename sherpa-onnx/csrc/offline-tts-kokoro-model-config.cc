@@ -20,17 +20,17 @@ void OfflineTtsKokoroModelConfig::Register(ParseOptions *po) {
   po->Register("kokoro-tokens", &tokens,
                "Path to tokens.txt for Kokoro models");
   po->Register("kokoro-lang", &lang,
-               "Used only by kokoro >= 1.0. Example values: "
-               "en (English), "
+               "Required for Kokoro generation unless lang is supplied in "
+               "GenerationConfig.extra. Supported values: en-us or en-gb "
+               "(English), ja-cutlet or ja-jtalk (Japanese), cmn (Mandarin), "
                "es (Spanish), fr (French), hi (hindi), it (Italian), "
-               "pt-br (Brazilian Portuguese)."
-               "You can leave it empty, in which case you need to provide "
-               "--kokoro-lexicon.");
+               "pt-br (Brazilian Portuguese).");
   po->Register(
       "kokoro-lexicon", &lexicon,
-      "Path to lexicon.txt for Kokoro models. Used only for Kokoro >= v1.0"
+      "Path to lexicon.txt for Kokoro models. Used only for Kokoro >= v1.0. "
       "You can pass multiple files, separated by ','. Example: "
-      "./lexicon-us-en.txt,./lexicon-zh.txt");
+      "./lexicon-us-en.txt,./lexicon-cmn.txt,./lexicon-ja-cutlet.txt. "
+      "Lexicon basenames must be one of the standard generated filenames.");
   po->Register("kokoro-data-dir", &data_dir,
                "Path to the directory containing dict for espeak-ng.");
   po->Register("kokoro-dict-dir", &dict_dir,

@@ -611,7 +611,8 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
     for (int32_t i = 0; i != audio->num_term_alignments; ++i) {
       const auto &a = audio->term_alignments[i];
       ans.term_alignments->push_back(
-          {a.text, a.phoneme, a.start_ts, a.end_ts});
+          {a.text, a.raw_phonemes, a.inferred_phonemes, a.start_ts,
+           a.end_ts});
     }
   }
 
@@ -656,7 +657,8 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
     for (int32_t i = 0; i != audio->num_term_alignments; ++i) {
       const auto &a = audio->term_alignments[i];
       ans.term_alignments->push_back(
-          {a.text, a.phoneme, a.start_ts, a.end_ts});
+          {a.text, a.raw_phonemes, a.inferred_phonemes, a.start_ts,
+           a.end_ts});
     }
   }
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);

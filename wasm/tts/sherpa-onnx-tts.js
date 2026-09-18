@@ -854,13 +854,16 @@ class OfflineTts {
 
     const ans = [];
     for (let i = 0; i < count; ++i) {
-      const offset = alignmentsPtr + i * 16;
+      // WASM32 uses 4-byte pointers: 3 pointers + 2 floats = 5 * 4 = 20 bytes.
+      const offset = alignmentsPtr + i * 20;
       ans.push({
         text: this.Module.UTF8ToString(this.Module.HEAPU32[offset / 4]),
-        phoneme:
+        rawPhonemes:
             this.Module.UTF8ToString(this.Module.HEAPU32[offset / 4 + 1]),
-        startTs: this.Module.HEAPF32[offset / 4 + 2],
-        endTs: this.Module.HEAPF32[offset / 4 + 3],
+        inferredPhonemes:
+            this.Module.UTF8ToString(this.Module.HEAPU32[offset / 4 + 2]),
+        startTs: this.Module.HEAPF32[offset / 4 + 3],
+        endTs: this.Module.HEAPF32[offset / 4 + 4],
       });
     }
     return ans;

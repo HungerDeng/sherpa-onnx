@@ -22,8 +22,8 @@ sequenceDiagram
 
   CV->>VM: createOfflineTts()  (ContentView.swift:184)
   VM->>VM: getTtsFor_kokoro_multi_lang_v1_0()  (ViewModel.swift)
-  VM->>VM: resources: model.onnx · voices.bin · tokens.txt · lexicon-us-en.txt · lexicon-zh.txt · espeak-ng-data · number-zh.fst · date-zh.fst · phone-zh.fst
-  VM->>VM: lexicon = lexicon-us-en.txt,lexicon-zh.txt · ruleFsts = date-zh.fst,phone-zh.fst,number-zh.fst
+  VM->>VM: resources: model.onnx · voices.bin · tokens.txt · lexicon-us-en.txt · lexicon-cmn.txt · espeak-ng-data · number-zh.fst · date-zh.fst · phone-zh.fst
+  VM->>VM: lexicon = lexicon-us-en.txt,lexicon-cmn.txt · ruleFsts = date-zh.fst,phone-zh.fst,number-zh.fst
   VM->>VM: KokoroModelConfig → ModelConfig(kokoro:) → OfflineTtsConfig(model:ruleFsts:)
   VM->>SW: SherpaOnnxOfflineTtsWrapper(config: &config)
   SW->>API: SherpaOnnxCreateOfflineTts(config)  (SherpaOnnx.swift:1410)

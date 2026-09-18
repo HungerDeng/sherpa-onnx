@@ -896,9 +896,10 @@ struct OfflineTtsKokoroModelConfig {
   std::string data_dir;
   /** Reserved field. Currently unused by the wrapper. */
   std::string dict_dir;
-  /** Optional lexicon file. */
+  /** Optional comma-separated standard Kokoro lexicon paths. */
   std::string lexicon;
-  /** Language/voice family hint. */
+  /** Required Kokoro language (e.g. zh, ja-cutlet, ja-jtalk) unless supplied
+   * in GenerationConfig::extra. */
   std::string lang;
 
   /** Length scale. Values < 1 are faster; values > 1 are slower. */
@@ -1031,7 +1032,7 @@ struct GenerationConfig {
   /** Number of flow-matching steps when supported. */
   int32_t num_steps = 5;
 
-  /** Model-specific extra attributes serialized to JSON internally. */
+  /** Model-specific attributes. Kokoro accepts a required `lang` override. */
   std::unordered_map<std::string, std::string> extra;
 };
 
@@ -1052,7 +1053,13 @@ struct OfflineTtsConfig {
 /** @brief Frontend term metadata returned by Kokoro v1.0+. */
 struct TermAlignment {
   std::string text;
-  std::string phoneme;
+
+  /** G2P phonemes before model-token filtering and alias canonicalization. */
+  std::string raw_phonemes;
+
+  /** Canonical phonemes reconstructed from the model token IDs. */
+  std::string inferred_phonemes;
+
   float start_ts = -1.0f;
   float end_ts = -1.0f;
 };

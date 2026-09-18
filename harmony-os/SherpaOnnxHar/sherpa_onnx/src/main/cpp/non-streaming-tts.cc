@@ -538,7 +538,8 @@ static void SetTermAlignments(Napi::Env env, Napi::Object *result,
     const auto &src = audio->term_alignments[i];
     Napi::Object value = Napi::Object::New(env);
     value.Set("text", src.text);
-    value.Set("phoneme", src.phoneme);
+    value.Set("rawPhonemes", src.raw_phonemes);
+    value.Set("inferredPhonemes", src.inferred_phonemes);
     value.Set("startTs", src.start_ts);
     value.Set("endTs", src.end_ts);
     values.Set(i, value);

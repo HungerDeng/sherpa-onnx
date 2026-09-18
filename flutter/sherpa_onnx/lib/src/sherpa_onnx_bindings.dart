@@ -327,7 +327,9 @@ final class SherpaOnnxGenerationConfig extends Struct {
 final class SherpaOnnxTermAlignment extends Struct {
   external Pointer<Utf8> text;
 
-  external Pointer<Utf8> phoneme;
+  external Pointer<Utf8> rawPhonemes;
+
+  external Pointer<Utf8> inferredPhonemes;
 
   @Float()
   external double startTs;

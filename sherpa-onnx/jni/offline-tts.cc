@@ -372,18 +372,23 @@ static jobject CreateAudioObject(JNIEnv *env,
     alignments_arr = env->NewObjectArray(audio.term_alignments->size(),
                                          alignment_cls, nullptr);
     jmethodID alignment_ctor = env->GetMethodID(
-        alignment_cls, "<init>", "(Ljava/lang/String;Ljava/lang/String;FF)V");
+        alignment_cls, "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;FF)V");
     for (size_t i = 0; alignment_ctor && i != audio.term_alignments->size();
          ++i) {
       const auto &a = (*audio.term_alignments)[i];
       jstring text = env->NewStringUTF(a.text.c_str());
-      jstring phoneme = env->NewStringUTF(a.phoneme.c_str());
+      jstring raw_phonemes = env->NewStringUTF(a.raw_phonemes.c_str());
+      jstring inferred_phonemes =
+          env->NewStringUTF(a.inferred_phonemes.c_str());
       jobject obj = env->NewObject(alignment_cls, alignment_ctor, text,
-                                   phoneme, a.start_ts, a.end_ts);
+                                   raw_phonemes, inferred_phonemes, a.start_ts,
+                                   a.end_ts);
       env->SetObjectArrayElement(alignments_arr, i, obj);
       env->DeleteLocalRef(obj);
       env->DeleteLocalRef(text);
-      env->DeleteLocalRef(phoneme);
+      env->DeleteLocalRef(raw_phonemes);
+      env->DeleteLocalRef(inferred_phonemes);
     }
   }
 

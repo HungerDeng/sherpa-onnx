@@ -13,7 +13,7 @@ async function createOfflineTts() {
         tokens: './kokoro-multi-lang-v1_0/tokens.txt',
         dataDir: './kokoro-multi-lang-v1_0/espeak-ng-data',
         lexicon:
-            './kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-zh.txt',
+            './kokoro-multi-lang-v1_0/lexicon-us-en.txt,./kokoro-multi-lang-v1_0/lexicon-cmn.txt',
       },
       debug: false,
       numThreads: 1,

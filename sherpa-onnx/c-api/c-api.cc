@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -1668,7 +1669,9 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxCreateGeneratedAudio(
     for (size_t i = 0; i != audio.term_alignments->size(); ++i) {
       const auto &src = (*audio.term_alignments)[i];
       alignments[i].text = SherpaOnnxCopyString(src.text);
-      alignments[i].phoneme = SherpaOnnxCopyString(src.phoneme);
+      alignments[i].raw_phonemes = SherpaOnnxCopyString(src.raw_phonemes);
+      alignments[i].inferred_phonemes =
+          SherpaOnnxCopyString(src.inferred_phonemes);
       alignments[i].start_ts = src.start_ts;
       alignments[i].end_ts = src.end_ts;
     }
@@ -1687,8 +1690,16 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
   config.sid = sid;
   config.speed = speed;
 
-  sherpa_onnx::GeneratedAudio audio =
-      tts->impl->Generate(text, config, callback);
+  sherpa_onnx::GeneratedAudio audio;
+  try {
+    audio = tts->impl->Generate(text, config, callback);
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: %s", e.what());
+    return nullptr;
+  } catch (...) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: unknown C++ exception");
+    return nullptr;
+  }
 
   if (audio.samples.empty()) {
     return nullptr;
@@ -1736,7 +1747,16 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
     }
   }
 
-  sherpa_onnx::GeneratedAudio audio = tts->impl->Generate(text, cfg, callback);
+  sherpa_onnx::GeneratedAudio audio;
+  try {
+    audio = tts->impl->Generate(text, cfg, callback);
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: %s", e.what());
+    return nullptr;
+  } catch (...) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: unknown C++ exception");
+    return nullptr;
+  }
 
   if (audio.samples.empty()) {
     return nullptr;
@@ -1904,7 +1924,16 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithZipvoice(
   config.reference_text = ptext_s;
   config.num_steps = num_steps;
 
-  auto out = tts->impl->Generate(text_s, config, /*callback=*/nullptr);
+  sherpa_onnx::GeneratedAudio out;
+  try {
+    out = tts->impl->Generate(text_s, config, /*callback=*/nullptr);
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: %s", e.what());
+    return nullptr;
+  } catch (...) {
+    SHERPA_ONNX_LOGE("Failed to generate audio: unknown C++ exception");
+    return nullptr;
+  }
 
   if (out.samples.empty()) {
     return nullptr;
@@ -1950,7 +1979,8 @@ void SherpaOnnxDestroyOfflineTtsGeneratedAudio(
   if (p) {
     for (int32_t i = 0; i != p->num_term_alignments; ++i) {
       delete[] p->term_alignments[i].text;
-      delete[] p->term_alignments[i].phoneme;
+      delete[] p->term_alignments[i].raw_phonemes;
+      delete[] p->term_alignments[i].inferred_phonemes;
     }
     delete[] p->term_alignments;
     delete[] p->samples;

@@ -542,9 +542,9 @@ void CNonStreamingTextToSpeechDlg::Init() {
     config.model.kokoro.voices = "./voices.bin";
     config.model.kokoro.tokens = "./tokens.txt";
     config.model.kokoro.data_dir = "./espeak-ng-data";
-    if (Exists("./dict/jieba.dict.utf8") && Exists("./lexicon-zh.txt")) {
+    if (Exists("./dict/jieba.dict.utf8") && Exists("./lexicon-cmn.txt")) {
       config.model.kokoro.dict_dir = "./dict";
-      config.model.kokoro.lexicon = "./lexicon-us-en.txt,./lexicon-zh.txt";
+      config.model.kokoro.lexicon = "./lexicon-us-en.txt,./lexicon-cmn.txt";
     }
   } else if (Exists("./hifigan.onnx") || Exists("./vocos.onnx")) {
     // it is a matcha tts model

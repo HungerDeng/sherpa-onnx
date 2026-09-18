@@ -1245,7 +1245,10 @@ public class SherpaOnnxWaveWrapper {
 
 public struct SherpaOnnxTermAlignmentWrapper {
   public let text: String
-  public let phoneme: String
+  /// G2P output before model-token filtering and alias canonicalization.
+  public let rawPhonemes: String
+  /// Canonical phonemes reconstructed from the model token IDs.
+  public let inferredPhonemes: String
   public let startTs: Float
   public let endTs: Float
 }
@@ -1290,7 +1293,8 @@ public class SherpaOnnxGeneratedAudioWrapper {
       let value = p[i]
       return SherpaOnnxTermAlignmentWrapper(
         text: String(cString: value.text),
-        phoneme: String(cString: value.phoneme),
+        rawPhonemes: String(cString: value.raw_phonemes),
+        inferredPhonemes: String(cString: value.inferred_phonemes),
         startTs: value.start_ts,
         endTs: value.end_ts)
     }
