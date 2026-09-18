@@ -176,7 +176,7 @@ def main():
     m = OnnxModel(
         model_filename="./kokoro.onnx",
         tokens="./tokens.txt",
-        lexicon="./lexicon-us-en.txt,./lexicon-zh.txt",
+        lexicon="./lexicon-us-en.txt,./lexicon-cmn.txt",
         voices_bin="./voices.bin",
     )
     text = "来听一听, 这个是什么口音? How are you doing? Are you ok? Thank you! 你觉得中英文说得如何呢?"

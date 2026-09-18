@@ -53,8 +53,20 @@ if [ ! -f ./tokens.txt ]; then
   ./generate_tokens.py
 fi
 
-if [ ! -f ./lexicon-zh.txt ]; then
+if [ ! -f ./lexicon-cmn.txt ]; then
   ./generate_lexicon_zh.py
+fi
+
+if ! python3 -c 'import os, sys, unidic; sys.exit(0 if os.path.isfile(os.path.join(unidic.DICDIR, "sys.dic")) else 1)'; then
+  python3 -m unidic download
+fi
+
+if [ ! -f ./lexicon-ja-cutlet.txt ]; then
+  ./generate_lexicon_ja.py --backend cutlet
+fi
+
+if [ ! -f ./lexicon-ja-jtalk.txt ]; then
+  ./generate_lexicon_ja.py --backend jtalk
 fi
 
 if [[ ! -f ./lexicon-us-en.txt || ! -f ./lexicon-gb-en.txt ]]; then
@@ -80,7 +92,9 @@ for generated_file in \
   kokoro.onnx \
   kokoro.int8.onnx \
   tokens.txt \
-  lexicon-zh.txt \
+  lexicon-cmn.txt \
+  lexicon-ja-cutlet.txt \
+  lexicon-ja-jtalk.txt \
   lexicon-us-en.txt \
   lexicon-gb-en.txt \
   voices.bin \

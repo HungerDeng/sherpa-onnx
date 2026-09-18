@@ -81,7 +81,7 @@ if [ ! -f ./tokens.txt ]; then
   ./generate_tokens.py
 fi
 
-if [ ! -f ./lexicon-zh.txt ]; then
+if [ ! -f ./lexicon-cmn.txt ]; then
   ./generate_lexicon_zh.py
 fi
 
