@@ -1,0 +1,14 @@
+{
+  "phonemes": "ðə pɹˈaɪs ɪz wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz. ɐ bˈɪt ɛkspˈɛnsɪv.",
+  "spans": [
+    {"phonemes": "ðə"},
+    {"phonemes": "pɹˈaɪs"},
+    {"phonemes": "ɪz"},
+    {"phonemes": "wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz"},
+    {"phonemes": "."},
+    {"phonemes": "ɐ"},
+    {"phonemes": "bˈɪt"},
+    {"phonemes": "ɛkspˈɛnsɪv"},
+    {"phonemes": "."}
+  ]
+}

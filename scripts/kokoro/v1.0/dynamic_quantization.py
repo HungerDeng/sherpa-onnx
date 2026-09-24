@@ -24,6 +24,7 @@ NodeArg(name='style', type='tensor(float)', shape=[1, 256])
 NodeArg(name='speed', type='tensor(float)', shape=[1])
 -----
 NodeArg(name='audio', type='tensor(float)', shape=['audio_length'])
+NodeArg(name='pred_dur', type='tensor(int64)', shape=['sequence_length'])
 """
 
 

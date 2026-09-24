@@ -48,45 +48,42 @@ ls -lh
 du -h -d1 .
 popd
 
-if [ ! -f ./kokoro.onnx ]; then
+has_pred_dur() {
+  python3 - "$1" <<'PY'
+import sys
+
+import onnx
+
+model = onnx.load(sys.argv[1], load_external_data=False)
+outputs = {output.name: output for output in model.graph.output}
+duration = outputs.get("pred_dur")
+valid = (
+    "audio" in outputs
+    and duration is not None
+    and duration.type.tensor_type.elem_type == onnx.TensorProto.INT64
+)
+sys.exit(0 if valid else 1)
+PY
+}
+
+if [ ! -f ./kokoro.onnx ] || ! has_pred_dur ./kokoro.onnx; then
   python3 ./export_onnx.py
+  rm -f ./.add-meta-data.done ./kokoro.int8.onnx
 fi
 
-if [ ! -f ./.add-meta-data.done ]; then
+if [ ! -f ./.add-meta-data.done ] || [ ./kokoro.onnx -nt ./.add-meta-data.done ]; then
   python3 ./add_meta_data.py
   touch ./.add-meta-data.done
 fi
 
-if [ ! -f ./kokoro.int8.onnx ]; then
+if [ ! -f ./kokoro.int8.onnx ] ||
+   [ ./kokoro.onnx -nt ./kokoro.int8.onnx ] ||
+   ! has_pred_dur ./kokoro.int8.onnx; then
   python3 ./dynamic_quantization.py
-fi
-
-if [ ! -f us_gold.json ]; then
-  curl -SL -O https://raw.githubusercontent.com/hexgrad/misaki/refs/heads/main/misaki/data/us_gold.json
-fi
-
-if [ ! -f us_silver.json ]; then
-  curl -SL -O https://raw.githubusercontent.com/hexgrad/misaki/refs/heads/main/misaki/data/us_silver.json
-fi
-
-if [ ! -f gb_gold.json ]; then
-  curl -SL -O https://raw.githubusercontent.com/hexgrad/misaki/refs/heads/main/misaki/data/gb_gold.json
-fi
-
-if [ ! -f gb_silver.json ]; then
-  curl -SL -O https://raw.githubusercontent.com/hexgrad/misaki/refs/heads/main/misaki/data/gb_silver.json
 fi
 
 if [ ! -f ./tokens.txt ]; then
   ./generate_tokens.py
-fi
-
-if [ ! -f ./lexicon-zh.txt ]; then
-  ./generate_lexicon_zh.py
-fi
-
-if [[ ! -f ./lexicon-us-en.txt || ! -f ./lexicon-gb-en.txt ]]; then
-  ./generate_lexicon_en.py
 fi
 
 if [ ! -f ./voices.bin ]; then
