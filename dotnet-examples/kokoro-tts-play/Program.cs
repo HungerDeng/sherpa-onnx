@@ -1,4 +1,4 @@
-﻿// Copyright (c)  2025  Xiaomi Corporation
+// Copyright (c)  2025  Xiaomi Corporation
 //
 // This file shows how to use a non-streaming Kokoro TTS model
 // for text-to-speech
@@ -17,10 +17,9 @@ class KokoroTtsPlayDemo
   static void Main(string[] args)
   {
     var config = new OfflineTtsConfig();
-    config.Model.Kokoro.Model = "./kokoro-en-v0_19/model.onnx";
-    config.Model.Kokoro.Voices = "./kokoro-en-v0_19/voices.bin";
-    config.Model.Kokoro.Tokens = "./kokoro-en-v0_19/tokens.txt";
-    config.Model.Kokoro.DataDir = "./kokoro-en-v0_19/espeak-ng-data";
+    config.Model.Kokoro.Model = "./kokoro-multi-lang-v1_0/model.onnx";
+    config.Model.Kokoro.Voices = "./kokoro-multi-lang-v1_0/voices.bin";
+    config.Model.Kokoro.Tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
 
     config.Model.NumThreads = 2;
     config.Model.Debug = 1;
@@ -28,15 +27,24 @@ class KokoroTtsPlayDemo
 
     var tts = new OfflineTts(config);
     var speed = 1.0f;
-    var text = "Today as always, men fall into two groups: slaves and free men. Whoever " +
-      "does not have two-thirds of his day for himself, is a slave, whatever " +
-      "he may be: a statesman, a businessman, an official, or a scholar. " +
-      "Friends fell out often because life was changing so fast. The easiest " +
-      "thing in the world was to lose touch with someone.";
+    // A G2pOutput from misaki-rs, reduced to phonemes and spans[].phonemes.
+    var input = new PhonemeInput {
+      Phonemes = "ˌeɪˈaɪ ɪz sˌoʊ ˈɔːsʌm. aɪ kˈænt lˈɪv wɪðˈaʊt ɪt.",
+      Spans = new[] {
+        new PhonemeSpan { Phonemes = "ˌeɪˈaɪ" },
+        new PhonemeSpan { Phonemes = "ɪz" },
+        new PhonemeSpan { Phonemes = "sˌoʊ" },
+        new PhonemeSpan { Phonemes = "ˈɔːsʌm" },
+        new PhonemeSpan { Phonemes = "." },
+        new PhonemeSpan { Phonemes = "aɪ" },
+        new PhonemeSpan { Phonemes = "kˈænt" },
+        new PhonemeSpan { Phonemes = "lˈɪv" },
+        new PhonemeSpan { Phonemes = "wɪðˈaʊt" },
+        new PhonemeSpan { Phonemes = "ɪt" },
+        new PhonemeSpan { Phonemes = "." },
+      },
+    };
 
-    // mapping of sid to voice name
-    // 0->af, 1->af_bella, 2->af_nicole, 3->af_sarah, 4->af_sky, 5->am_adam
-    // 6->am_michael, 7->bf_emma, 8->bf_isabella, 9->bm_george, 10->bm_lewis
     var sid = 0;
     OfflineTtsGenerationConfig genConfig = new OfflineTtsGenerationConfig();
     genConfig.Sid = sid;
@@ -171,7 +179,8 @@ class KokoroTtsPlayDemo
 
     var callback = new OfflineTtsCallbackProgressWithArg(MyCallback);
 
-    var audio = tts.GenerateWithConfig(text, genConfig, callback);
+    var audio = tts.GenerateFromPhonemesWithConfig(input, genConfig, callback);
+    if (audio == null) throw new Exception("Kokoro generation failed");
     var outputFilename = "./generated-kokoro-0.wav";
     var ok = audio.SaveToWaveFile(outputFilename);
 

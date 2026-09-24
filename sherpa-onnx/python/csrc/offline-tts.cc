@@ -13,17 +13,39 @@
 namespace sherpa_onnx {
 
 static void PybindGeneratedAudio(py::module *m) {
+  py::class_<SpanAlignment>(*m, "SpanAlignment")
+      .def(py::init<>())
+      .def_readwrite("original_phonemes", &SpanAlignment::original_phonemes)
+      .def_readwrite("inferred_phonemes", &SpanAlignment::inferred_phonemes)
+      .def_readwrite("start_ts", &SpanAlignment::start_ts)
+      .def_readwrite("end_ts", &SpanAlignment::end_ts);
+
   using PyClass = GeneratedAudio;
   py::class_<PyClass>(*m, "GeneratedAudio")
       .def(py::init<>())
       .def_readwrite("samples", &PyClass::samples)
       .def_readwrite("sample_rate", &PyClass::sample_rate)
+      .def_readwrite("span_alignments", &PyClass::span_alignments)
       .def("__str__", [](PyClass &self) {
         std::ostringstream os;
         os << "GeneratedAudio(sample_rate=" << self.sample_rate << ", ";
         os << "num_samples=" << self.samples.size() << ")";
         return os.str();
       });
+}
+
+static void PybindPhonemeInput(py::module *m) {
+  py::class_<PhonemeSpan>(*m, "PhonemeSpan")
+      .def(py::init<>())
+      .def(py::init<const std::string &>(), py::arg("phonemes"))
+      .def_readwrite("phonemes", &PhonemeSpan::phonemes);
+
+  py::class_<PhonemeInput>(*m, "PhonemeInput")
+      .def(py::init<>())
+      .def(py::init<const std::string &, const std::vector<PhonemeSpan> &>(),
+           py::arg("phonemes"), py::arg("spans"))
+      .def_readwrite("phonemes", &PhonemeInput::phonemes)
+      .def_readwrite("spans", &PhonemeInput::spans);
 }
 
 static void PybindGenerationConfig(py::module *m) {
@@ -100,6 +122,7 @@ Return the number of speakers supported by the model.
 void PybindOfflineTts(py::module *m) {
   PybindOfflineTtsConfig(m);
   PybindGeneratedAudio(m);
+  PybindPhonemeInput(m);
   PybindGenerationConfig(m);
 
   using PyClass = OfflineTts;
@@ -110,6 +133,57 @@ void PybindOfflineTts(py::module *m) {
                              kSampleRateDoc)
       .def_property_readonly("num_speakers", &PyClass::NumSpeakers,
                              kNumSpeakersDoc)
+      .def(
+          "generate_from_phonemes",
+          [](const PyClass &self, const PhonemeInput &input, int64_t sid,
+             float speed,
+             std::function<int32_t(py::array_t<float>, float)> callback)
+              -> GeneratedAudio {
+            GenerationConfig config;
+            config.sid = sid;
+            config.speed = speed;
+            if (!callback) {
+              return self.GenerateFromPhonemes(input, config);
+            }
+            std::function<int32_t(const float *, int32_t, float)>
+                callback_wrapper = [callback](const float *samples, int32_t n,
+                                              float progress) {
+                  py::gil_scoped_acquire acquire;
+                  py::array_t<float> array(n);
+                  auto buf = array.request();
+                  auto *p = static_cast<float *>(buf.ptr);
+                  std::copy(samples, samples + n, p);
+                  return callback(array, progress);
+                };
+            return self.GenerateFromPhonemes(input, config, callback_wrapper);
+          },
+          py::arg("input"), py::arg("sid") = 0, py::arg("speed") = 1.0,
+          py::arg("callback") = py::none(),
+          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "generate_from_phonemes",
+          [](const PyClass &self, const PhonemeInput &input,
+             const GenerationConfig &config,
+             std::function<int32_t(py::array_t<float>, float)> callback)
+              -> GeneratedAudio {
+            if (!callback) {
+              return self.GenerateFromPhonemes(input, config);
+            }
+            std::function<int32_t(const float *, int32_t, float)>
+                callback_wrapper = [callback](const float *samples, int32_t n,
+                                              float progress) {
+                  py::gil_scoped_acquire acquire;
+                  py::array_t<float> array(n);
+                  auto buf = array.request();
+                  auto *p = static_cast<float *>(buf.ptr);
+                  std::copy(samples, samples + n, p);
+                  return callback(array, progress);
+                };
+            return self.GenerateFromPhonemes(input, config, callback_wrapper);
+          },
+          py::arg("input"), py::arg("config"),
+          py::arg("callback") = py::none(),
+          py::call_guard<py::gil_scoped_release>())
       .def(
           "generate",
           [](const PyClass &self, const std::string &text, int64_t sid,

@@ -58,6 +58,9 @@ export { OfflineTtsKittenModelConfig,
   TtsGenerationConfig,
   TtsInput,
   TtsInputWithConfig,
+  TtsPhonemeSpan,
+  TtsPhonemeInput,
+  TtsSpanAlignment,
 } from './src/main/ets/components/NonStreamingTts';
 
 export { OfflinePunctuationModelConfig,

@@ -29,11 +29,18 @@ data class OfflineTtsKokoroModelConfig(
     var model: String = "",
     var voices: String = "",
     var tokens: String = "",
-    var dataDir: String = "",
-    var lexicon: String = "",
-    var lang: String = "",
-    var dictDir: String = "", // unused
     var lengthScale: Float = 1.0f,
+)
+
+data class PhonemeSpan(val phonemes: String)
+
+data class PhonemeInput(val phonemes: String, val spans: Array<PhonemeSpan>)
+
+data class SpanAlignment(
+    val originalPhonemes: String,
+    val inferredPhonemes: String,
+    val startTs: Float,
+    val endTs: Float,
 )
 
 data class OfflineTtsZipVoiceModelConfig(
@@ -116,6 +123,7 @@ data class OfflineTtsConfig(
 class GeneratedAudio(
     val samples: FloatArray,
     val sampleRate: Int,
+    val spanAlignments: Array<SpanAlignment>? = null,
 ) {
     fun save(filename: String) =
         saveImpl(filename = filename, samples = samples, sampleRate = sampleRate)
@@ -165,6 +173,23 @@ class OfflineTts(
         speed: Float = 1.0f
     ): GeneratedAudio {
         return generateImpl(ptr, text = text, sid = sid, speed = speed)
+    }
+
+    fun generateFromPhonemes(
+        input: PhonemeInput,
+        sid: Int = 0,
+        speed: Float = 1.0f,
+    ): GeneratedAudio {
+        return generateFromPhonemesImpl(
+            ptr, input, GenerationConfig(sid = sid, speed = speed), null)
+    }
+
+    fun generateFromPhonemes(
+        input: PhonemeInput,
+        config: GenerationConfig,
+        callback: ((samples: FloatArray) -> Int)? = null,
+    ): GeneratedAudio {
+        return generateFromPhonemesImpl(ptr, input, config, callback)
     }
 
     fun generateWithCallback(
@@ -266,6 +291,13 @@ class OfflineTts(
         callback: ((samples: FloatArray) -> Int)?
     ): GeneratedAudio
 
+    private external fun generateFromPhonemesImpl(
+        ptr: Long,
+        input: PhonemeInput,
+        config: GenerationConfig,
+        callback: ((samples: FloatArray) -> Int)?,
+    ): GeneratedAudio
+
     companion object {
         init {
             System.loadLibrary("sherpa-onnx-jni")
@@ -363,12 +395,6 @@ fun getOfflineTtsConfig(
             model = "$modelDir/$modelName",
             voices = "$modelDir/$voices",
             tokens = "$modelDir/tokens.txt",
-            dataDir = dataDir,
-            lexicon = when {
-                lexicon == "" -> lexicon
-                "," in lexicon -> lexicon
-                else -> "$modelDir/$lexicon"
-            },
         )
     } else {
         OfflineTtsKokoroModelConfig()

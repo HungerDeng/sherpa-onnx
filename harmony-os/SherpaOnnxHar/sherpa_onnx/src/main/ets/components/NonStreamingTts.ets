@@ -6,6 +6,7 @@ import {
   offlineTtsGenerateAsyncWithConfig,
   offlineTtsGenerateAsync,
   offlineTtsGenerateWithConfig,
+  offlineTtsGenerateFromPhonemesWithConfig,
 } from 'libsherpa_onnx.so';
 
 export class OfflineTtsVitsModelConfig {
@@ -34,11 +35,7 @@ export class OfflineTtsKokoroModelConfig {
   public model: string = '';
   public voices: string = '';
   public tokens: string = '';
-  public dataDir: string = '';
   public lengthScale: number = 1.0;
-  public dictDir: string = '';  // unused
-  public lexicon: string = '';
-  public lang: string = '';
 }
 
 export class OfflineTtsKittenModelConfig {
@@ -107,6 +104,25 @@ export class OfflineTtsConfig {
 export class TtsOutput {
   public samples: Float32Array = new Float32Array(0);
   public sampleRate: number = 0;
+  public spanAlignments: TtsSpanAlignment[] | null = null;
+}
+
+export class TtsPhonemeSpan {
+  public phonemes: string = '';
+}
+
+export class TtsPhonemeInput {
+  public phonemes: string = '';
+  public spans: TtsPhonemeSpan[] = [];
+  public generationConfig?: TtsGenerationConfig;
+  public enableExternalBuffer: boolean = true;
+}
+
+export class TtsSpanAlignment {
+  public originalPhonemes: string = '';
+  public inferredPhonemes: string = '';
+  public startTs: number = -1;
+  public endTs: number = -1;
 }
 
 interface TtsCallbackData {
@@ -170,6 +186,10 @@ export class OfflineTts {
 
   generateWithConfig(input: TtsInputWithConfig): TtsOutput {
     return offlineTtsGenerateWithConfig(this.handle, input);
+  }
+
+  generateFromPhonemes(input: TtsPhonemeInput): TtsOutput {
+    return offlineTtsGenerateFromPhonemesWithConfig(this.handle, input);
   }
 
   generateAsyncWithConfig(input: TtsInputWithConfig): Promise<TtsOutput> {

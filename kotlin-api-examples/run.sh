@@ -199,15 +199,8 @@ function testTts() {
   fi
 
   if [ ! -f ./kokoro-multi-lang-v1_0/model.onnx ]; then
-    curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
-    tar xf kokoro-multi-lang-v1_0.tar.bz2
-    rm kokoro-multi-lang-v1_0.tar.bz2
-  fi
-
-  if [ ! -f ./kokoro-en-v0_19/model.onnx ]; then
-    curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-    tar xf kokoro-en-v0_19.tar.bz2
-    rm kokoro-en-v0_19.tar.bz2
+    echo 'Export Kokoro v1.0 with pred_dur using scripts/kokoro/v1.0/run.sh and place its model.onnx, voices.bin, and tokens.txt in kotlin-api-examples/kokoro-multi-lang-v1_0.' >&2
+    exit 1
   fi
 
   if [ ! -f ./kitten-nano-en-v0_1-fp16/model.fp16.onnx ]; then

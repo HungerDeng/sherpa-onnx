@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -81,6 +82,9 @@ class MainActivity : AppCompatActivity() {
         // we will change sampleText here in the CI
         val sampleText = ""
         text.setText(sampleText)
+        if (tts.config.model.kokoro.model.isNotEmpty()) {
+            text.hint = "Paste a Misaki G2pOutput JSON object"
+        }
 
         play.isEnabled = false
         save.isEnabled = false
@@ -146,10 +150,28 @@ class MainActivity : AppCompatActivity() {
         }
 
         val textStr = text.text.toString().trim()
-        if (textStr.isBlank() || textStr.isEmpty()) {
-            Toast.makeText(applicationContext, "Please input a non-empty text!", Toast.LENGTH_SHORT)
+        if (textStr.isBlank()) {
+            Toast.makeText(applicationContext, "Please enter text or Misaki G2pOutput JSON", Toast.LENGTH_SHORT)
                 .show()
             return
+        }
+
+        val phonemeInput = if (tts.config.model.kokoro.model.isNotEmpty()) {
+            try {
+                val output = JSONObject(textStr)
+                val spans = output.getJSONArray("spans")
+                PhonemeInput(
+                    phonemes = output.getString("phonemes"),
+                    spans = Array(spans.length()) { index ->
+                        PhonemeSpan(spans.getJSONObject(index).getString("phonemes"))
+                    },
+                )
+            } catch (e: Exception) {
+                Toast.makeText(applicationContext, "Invalid Misaki G2pOutput JSON: ${e.message}", Toast.LENGTH_LONG).show()
+                return
+            }
+        } else {
+            null
         }
 
         track.pause()
@@ -162,25 +184,43 @@ class MainActivity : AppCompatActivity() {
         generate.isEnabled = false
         stopped = false
         Thread {
-            val genConfig = GenerationConfig(sid = sidInt, speed = speedFloat)
-            if (isSupertonic) {
-                genConfig.extra = mapOf("lang" to supertonicLang)
-            }
-            val audio = tts.generateWithConfigAndCallback(
-                text = textStr,
-                config = genConfig,
-                callback = this::callback
-            )
+            try {
+                val genConfig = GenerationConfig(sid = sidInt, speed = speedFloat)
+                if (isSupertonic) {
+                    genConfig.extra = mapOf("lang" to supertonicLang)
+                }
+                val audio = if (phonemeInput != null) {
+                    tts.generateFromPhonemes(
+                        input = phonemeInput,
+                        config = genConfig,
+                        callback = this::callback,
+                    )
+                } else {
+                    tts.generateWithConfigAndCallback(
+                        text = textStr,
+                        config = genConfig,
+                        callback = this::callback,
+                    )
+                }
+                audio.spanAlignments?.forEach { alignment ->
+                    Log.i(TAG, "${alignment.originalPhonemes} -> ${alignment.inferredPhonemes}: ${alignment.startTs}-${alignment.endTs}s")
+                }
 
-            val filename = application.filesDir.absolutePath + "/generated.wav"
-            val ok = audio.samples.size > 0 && audio.save(filename)
-            if (ok) {
+                val filename = application.filesDir.absolutePath + "/generated.wav"
+                val ok = audio.samples.isNotEmpty() && audio.save(filename)
                 runOnUiThread {
-                    play.isEnabled = true
-                    save.isEnabled = true
-                    share.isEnabled = true
+                    play.isEnabled = ok
+                    save.isEnabled = ok
+                    share.isEnabled = ok
                     generate.isEnabled = true
                     track.stop()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "TTS generation failed", e)
+                runOnUiThread {
+                    generate.isEnabled = true
+                    track.stop()
+                    Toast.makeText(applicationContext, "TTS generation failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -346,30 +386,21 @@ class MainActivity : AppCompatActivity() {
         // dataDir = "matcha-icefall-en_US-ljspeech/espeak-ng-data"
 
         // Example 9
-        // kokoro-en-v0_19
-        // modelDir = "kokoro-en-v0_19"
-        // modelName = "model.onnx"
-        // voices = "voices.bin"
-        // dataDir = "kokoro-en-v0_19/espeak-ng-data"
-
-        // Example 10
         // kokoro-multi-lang-v1_0
+        // Re-export model.onnx with pred_dur before using the phoneme-only API.
         // modelDir = "kokoro-multi-lang-v1_0"
         // modelName = "model.onnx"
         // voices = "voices.bin"
-        // dataDir = "kokoro-multi-lang-v1_0/espeak-ng-data"
-        // lexicon = "kokoro-multi-lang-v1_0/lexicon-us-en.txt,kokoro-multi-lang-v1_0/lexicon-zh.txt"
-        // ruleFsts = "$modelDir/phone-zh.fst,$modelDir/date-zh.fst,$modelDir/number-zh.fst"
 
-        // Example 11
+        // Example 10
         // kitten-nano-en-v0_1-fp16
         // modelDir = "kitten-nano-en-v0_1-fp16"
         // modelName = "model.fp16.onnx"
         // voices = "voices.bin"
-        // dataDir = "kokoro-multi-lang-v1_0/espeak-ng-data"
+        // dataDir = "kitten-nano-en-v0_1-fp16/espeak-ng-data"
         // isKitten = true
 
-        // Example 12
+        // Example 11
         // matcha-icefall-zh-en
         // https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/matcha-icefall-zh-en.html
         // modelDir = "matcha-icefall-zh-en"
@@ -378,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         // dataDir = "matcha-icefall-zh-en/espeak-ng-data"
         // lexicon = "lexicon.txt"
 
-        // Example 13
+        // Example 12
         // supertonic-3-tts (supports 31 languages, default: English)
         // https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models
         // modelDir = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"

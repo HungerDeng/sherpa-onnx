@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
 
-                                val testTextContent = getSampleText(TtsEngine.lang ?: "")
+                                val testTextContent = if (TtsEngine.isKokoro) "" else getSampleText(TtsEngine.lang ?: "")
 
                                 var testText by remember { mutableStateOf(testTextContent) }
                                 var startEnabled by remember { mutableStateOf(true) }
@@ -176,7 +176,9 @@ class MainActivity : ComponentActivity() {
                                 OutlinedTextField(
                                     value = testText,
                                     onValueChange = { testText = it },
-                                    label = { Text("Please input your text here") },
+                                    label = {
+                                        Text(if (TtsEngine.isKokoro) "Misaki G2pOutput JSON" else "Please input your text here")
+                                    },
                                     maxLines = 10,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -192,13 +194,27 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.padding(5.dp),
                                         onClick = {
                                             Log.i(TAG, "Clicked, text: $testText")
-                                            if (testText.isBlank() || testText.isEmpty()) {
+                                            if (testText.isBlank()) {
                                                 Toast.makeText(
                                                     applicationContext,
-                                                    "Please input some text to generate",
+                                                    "Please enter text or Misaki G2pOutput JSON",
                                                     Toast.LENGTH_SHORT
                                                 ).show()
                                             } else {
+                                                val phonemeInput = if (TtsEngine.isKokoro) {
+                                                    try {
+                                                        TtsEngine.parsePhonemeInput(testText)
+                                                    } catch (e: Exception) {
+                                                        Toast.makeText(
+                                                            applicationContext,
+                                                            "Invalid Misaki G2pOutput JSON: ${e.message}",
+                                                            Toast.LENGTH_LONG,
+                                                        ).show()
+                                                        return@Button
+                                                    }
+                                                } else {
+                                                    null
+                                                }
                                                 startEnabled = false
                                                 playEnabled = false
                                                 saveEnabled = false
@@ -249,12 +265,36 @@ class MainActivity : ComponentActivity() {
                                                     if (TtsEngine.isSupertonic) {
                                                         genConfig.extra = mapOf("lang" to TtsEngine.supertonicLang)
                                                     }
-                                                    val audio =
-                                                        TtsEngine.tts!!.generateWithConfigAndCallback(
-                                                            text = testText,
-                                                            config = genConfig,
-                                                            callback = ::callback,
-                                                        )
+                                                    val audio = try {
+                                                        if (phonemeInput != null) {
+                                                            TtsEngine.tts!!.generateFromPhonemes(
+                                                                input = phonemeInput,
+                                                                config = genConfig,
+                                                                callback = ::callback,
+                                                            )
+                                                        } else {
+                                                            TtsEngine.tts!!.generateWithConfigAndCallback(
+                                                                text = testText,
+                                                                config = genConfig,
+                                                                callback = ::callback,
+                                                            )
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        Log.e(TAG, "TTS generation failed", e)
+                                                        scope.launch { samplesChannel.send(FloatArray(0)) }
+                                                        withContext(Dispatchers.Main) {
+                                                            startEnabled = true
+                                                            Toast.makeText(
+                                                                applicationContext,
+                                                                "TTS generation failed: ${e.message}",
+                                                                Toast.LENGTH_LONG,
+                                                            ).show()
+                                                        }
+                                                        return@launch
+                                                    }
+                                                    audio.spanAlignments?.forEach { alignment ->
+                                                        Log.i(TAG, "${alignment.originalPhonemes} -> ${alignment.inferredPhonemes}: ${alignment.startTs}-${alignment.endTs}s")
+                                                    }
 
                                                     val elapsed =
                                                         startTime.elapsedNow().inWholeMilliseconds.toFloat() / 1000;
@@ -286,16 +326,12 @@ class MainActivity : ComponentActivity() {
                                                             filename
                                                         )
 
-                                                    if (ok) {
-                                                        withContext(Dispatchers.Main) {
-                                                            startEnabled = true
-                                                            playEnabled = true
-                                                            saveEnabled = true
-                                                            shareEnabled = true
-                                                            rtfText = RTF
-                                                        }
-
-
+                                                    withContext(Dispatchers.Main) {
+                                                        startEnabled = true
+                                                        playEnabled = ok
+                                                        saveEnabled = ok
+                                                        shareEnabled = ok
+                                                        rtfText = if (ok) RTF else "No audio generated"
                                                     }
                                                 }
                                             }

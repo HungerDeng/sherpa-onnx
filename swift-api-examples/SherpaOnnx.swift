@@ -657,7 +657,9 @@ public func sherpaOnnxOfflineRecognizerConfig(
   ruleFsts: String = "",
   ruleFars: String = "",
   blankPenalty: Float = 0.0,
-  hr: SherpaOnnxHomophoneReplacerConfig = sherpaOnnxHomophoneReplacerConfig()
+  hr: SherpaOnnxHomophoneReplacerConfig = sherpaOnnxHomophoneReplacerConfig(),
+  ctcFstDecoderConfig: SherpaOnnxOfflineCtcFstDecoderConfig =
+    SherpaOnnxOfflineCtcFstDecoderConfig(graph: nil, max_active: 3000)
 ) -> SherpaOnnxOfflineRecognizerConfig {
   return SherpaOnnxOfflineRecognizerConfig(
     feat_config: featConfig,
@@ -670,7 +672,8 @@ public func sherpaOnnxOfflineRecognizerConfig(
     rule_fsts: toCPointer(ruleFsts),
     rule_fars: toCPointer(ruleFars),
     blank_penalty: blankPenalty,
-    hr: hr
+    hr: hr,
+    ctc_fst_decoder_config: ctcFstDecoderConfig
   )
 }
 
@@ -1063,21 +1066,13 @@ public func sherpaOnnxOfflineTtsKokoroModelConfig(
   model: String = "",
   voices: String = "",
   tokens: String = "",
-  dataDir: String = "",
-  lengthScale: Float = 1.0,
-  dictDir: String = "",
-  lexicon: String = "",
-  lang: String = ""
+  lengthScale: Float = 1.0
 ) -> SherpaOnnxOfflineTtsKokoroModelConfig {
   return SherpaOnnxOfflineTtsKokoroModelConfig(
     model: toCPointer(model),
     voices: toCPointer(voices),
     tokens: toCPointer(tokens),
-    data_dir: toCPointer(dataDir),
-    length_scale: lengthScale,
-    dict_dir: toCPointer(dictDir),
-    lexicon: toCPointer(lexicon),
-    lang: toCPointer(lang)
+    length_scale: lengthScale
   )
 }
 
@@ -1243,6 +1238,13 @@ public class SherpaOnnxWaveWrapper {
   }
 }
 
+public struct SherpaOnnxSpanAlignmentSwift {
+  public let originalPhonemes: String
+  public let inferredPhonemes: String
+  public let startTs: Float
+  public let endTs: Float
+}
+
 public class SherpaOnnxGeneratedAudioWrapper {
   /// A pointer to the underlying counterpart in C
   public let audio: UnsafePointer<SherpaOnnxGeneratedAudio>!
@@ -1270,6 +1272,25 @@ public class SherpaOnnxGeneratedAudioWrapper {
       return [Float](UnsafeBufferPointer(start: p, count: Int(n)))
     } else {
       return []
+    }
+  }
+
+  /// One entry per input span for Kokoro; nil for other TTS models.
+  public var spanAlignments: [SherpaOnnxSpanAlignmentSwift]? {
+    if audio.pointee.has_span_alignments == 0 {
+      return nil
+    }
+    guard let rows = audio.pointee.span_alignments else {
+      return []
+    }
+    return (0..<Int(audio.pointee.num_span_alignments)).map { index in
+      let row = rows[index]
+      return SherpaOnnxSpanAlignmentSwift(
+        originalPhonemes: String(cString: row.original_phonemes),
+        inferredPhonemes: String(cString: row.inferred_phonemes),
+        startTs: row.start_ts,
+        endTs: row.end_ts
+      )
     }
   }
 
@@ -1459,6 +1480,44 @@ public class SherpaOnnxOfflineTtsWrapper {
       }
 
     return SherpaOnnxGeneratedAudioWrapper(audio: audio)
+  }
+
+  /// Generate Kokoro audio from aggregate phonemes and ordered span phonemes.
+  public func generateFromPhonemes(
+    phonemes: String,
+    spans: [String],
+    config: SherpaOnnxGenerationConfigSwift,
+    callback: TtsProgressCallbackWithArg? = nil,
+    arg: UnsafeMutableRawPointer? = nil
+  ) -> SherpaOnnxGeneratedAudioWrapper {
+    let bridge = SherpaOnnxGenerationConfigC(config)
+    let spanStrings = spans.map { span in
+      span.withCString { strdup($0)! }
+    }
+    defer {
+      for ptr in spanStrings { free(ptr) }
+    }
+    let cSpans = spanStrings.map { SherpaOnnxPhonemeSpan(phonemes: $0) }
+
+    let result: UnsafePointer<SherpaOnnxGeneratedAudio>? =
+      phonemes.withCString { aggregate in
+        cSpans.withUnsafeBufferPointer { spanBuffer in
+          var input = SherpaOnnxPhonemeInput(
+            phonemes: aggregate,
+            spans: spanBuffer.baseAddress,
+            num_spans: Int32(spanBuffer.count)
+          )
+          return withUnsafePointer(to: &input) { inputPtr in
+            withUnsafePointer(to: &bridge.cConfig) { configPtr in
+              SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+                tts, inputPtr, configPtr, callback, arg
+              )
+            }
+          }
+        }
+      }
+
+    return SherpaOnnxGeneratedAudioWrapper(audio: result)
   }
 
 }

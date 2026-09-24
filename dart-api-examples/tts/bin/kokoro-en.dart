@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
+import 'kokoro_input.dart';
 
 void main(List<String> arguments) async {
   await sherpa_onnx.initBindingsAsync();
@@ -13,14 +13,7 @@ void main(List<String> arguments) async {
     ..addOption('model', help: 'Path to the onnx model')
     ..addOption('voices', help: 'Path to the voices.bin')
     ..addOption('tokens', help: 'Path to tokens.txt')
-    ..addOption(
-      'data-dir',
-      help: 'Path to espeak-ng-data directory',
-      defaultsTo: '',
-    )
-    ..addOption('rule-fsts', help: 'Path to rule fsts', defaultsTo: '')
-    ..addOption('rule-fars', help: 'Path to rule fars', defaultsTo: '')
-    ..addOption('text', help: 'Text to generate TTS for')
+    ..addOption('g2p-output', help: 'Path to misaki-rs G2pOutput JSON')
     ..addOption('output-wav', help: 'Filename to save the generated audio')
     ..addOption('speed', help: 'Speech speed', defaultsTo: '1.0')
     ..addOption(
@@ -32,19 +25,14 @@ void main(List<String> arguments) async {
   if (res['model'] == null ||
       res['voices'] == null ||
       res['tokens'] == null ||
-      res['data-dir'] == null ||
-      res['output-wav'] == null ||
-      res['text'] == null) {
+      res['output-wav'] == null) {
     print(parser.usage);
     exit(1);
   }
   final model = res['model'] as String;
   final voices = res['voices'] as String;
   final tokens = res['tokens'] as String;
-  final dataDir = res['data-dir'] as String;
-  final ruleFsts = res['rule-fsts'] as String;
-  final ruleFars = res['rule-fars'] as String;
-  final text = res['text'] as String;
+  final input = loadG2pOutput(res['g2p-output'] as String?, priceInput);
   final outputWav = res['output-wav'] as String;
   var speed = double.tryParse(res['speed'] as String) ?? 1.0;
   final sid = int.tryParse(res['sid'] as String) ?? 0;
@@ -57,7 +45,6 @@ void main(List<String> arguments) async {
     model: model,
     voices: voices,
     tokens: tokens,
-    dataDir: dataDir,
   );
 
   final modelConfig = sherpa_onnx.OfflineTtsModelConfig(
@@ -68,8 +55,6 @@ void main(List<String> arguments) async {
   final config = sherpa_onnx.OfflineTtsConfig(
     model: modelConfig,
     maxNumSenetences: 1,
-    ruleFsts: ruleFsts,
-    ruleFars: ruleFars,
   );
 
   final tts = sherpa_onnx.OfflineTts(config);
@@ -78,7 +63,7 @@ void main(List<String> arguments) async {
     speed: speed,
     silenceScale: config.silenceScale,
   );
-  final audio = tts.generateWithConfig(text: text, config: genConfig);
+  final audio = tts.generateFromPhonemes(input: input, config: genConfig);
   tts.free();
 
   sherpa_onnx.writeWave(
@@ -86,5 +71,6 @@ void main(List<String> arguments) async {
     samples: audio.samples,
     sampleRate: audio.sampleRate,
   );
+  printSpanAlignments(audio);
   print('Saved to $outputWav');
 }

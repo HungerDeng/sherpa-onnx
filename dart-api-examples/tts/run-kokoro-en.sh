@@ -2,26 +2,23 @@
 
 set -ex
 
-dart pub get
+model_dir=../../scripts/kokoro/v1.0
+for file in kokoro.onnx voices.bin tokens.txt; do
+  if [ ! -f "$model_dir/$file" ]; then
+    echo "Export Kokoro v1.0 with $model_dir/run.sh first (requires pred_dur): $model_dir/$file is missing" >&2
+    exit 1
+  fi
+done
 
-# please visit
-# https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html
-# to download more models
-if [ ! -f ./kokoro-en-v0_19/model.onnx ]; then
-  curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-  tar xf kokoro-en-v0_19.tar.bz2
-  rm kokoro-en-v0_19.tar.bz2
-fi
+dart pub get
 
 dart run \
   ./bin/kokoro-en.dart \
-  --model ./kokoro-en-v0_19/model.onnx \
-  --voices ./kokoro-en-v0_19/voices.bin \
-  --tokens ./kokoro-en-v0_19/tokens.txt \
-  --data-dir ./kokoro-en-v0_19/espeak-ng-data \
+  --model "$model_dir/kokoro.onnx" \
+  --voices "$model_dir/voices.bin" \
+  --tokens "$model_dir/tokens.txt" \
   --sid 9 \
   --speed 1.0 \
-  --output-wav kokoro-en-9.wav \
-  --text "Friends fell out often because life was changing so fast. The easiest thing in the world was to lose touch with someone."
+  --output-wav kokoro-en-9.wav
 
 ls -lh *.wav

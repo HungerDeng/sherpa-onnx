@@ -12,13 +12,7 @@ namespace SherpaOnnx
             Model = "";
             Voices = "";
             Tokens = "";
-            DataDir = "";
-
             LengthScale = 1.0F;
-
-            DictDir = "";
-            Lexicon = "";
-            Lang = "";
         }
         [MarshalAs(UnmanagedType.LPStr)]
         public string Model;
@@ -29,18 +23,6 @@ namespace SherpaOnnx
         [MarshalAs(UnmanagedType.LPStr)]
         public string Tokens;
 
-        [MarshalAs(UnmanagedType.LPStr)]
-        public string DataDir;
-
         public float LengthScale;
-
-        [MarshalAs(UnmanagedType.LPStr)]
-        public string DictDir;
-
-        [MarshalAs(UnmanagedType.LPStr)]
-        public string Lexicon;
-
-        [MarshalAs(UnmanagedType.LPStr)]
-        public string Lang;
     }
 }

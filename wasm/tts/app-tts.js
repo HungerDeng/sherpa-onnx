@@ -128,6 +128,9 @@ function updateUiForModelType() {
   speakerIdSection.classList.toggle('hidden', useGenerationConfig);
   referenceAudioSection.classList.toggle('hidden', !useGenerationConfig);
   referenceTextSection.classList.toggle('hidden', !isZipVoice);
+  textArea.placeholder = ttsInstanceInfo.modelType === 7 ?
+      'Paste the misaki-rs G2pOutput JSON with phonemes and spans' :
+      'Please enter your text here and click the Generate button';
 }
 
 function setGenerationStatus(status) {
@@ -196,6 +199,7 @@ function downloadBlob(blob, filename) {
 generateBtn.onclick = async function() {
   const isZipVoice = ttsInstanceInfo.modelType === 4;
   const isPocketTts = ttsInstanceInfo.modelType === 5;
+  const isKokoro = ttsInstanceInfo.modelType === 7;
   const useGenerationConfig = isZipVoice || isPocketTts;
 
   let speakerId = speakerIdInput.value;
@@ -227,6 +231,32 @@ generateBtn.onclick = async function() {
   console.log('speakerId', speakerId);
   console.log('speed', speedInput.value);
   console.log('text', text);
+
+  if (isKokoro) {
+    let output;
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed.phonemes !== 'string' || !Array.isArray(parsed.spans) ||
+          parsed.spans.some(span => typeof span.phonemes !== 'string')) {
+        throw new Error('Expected phonemes and spans[].phonemes');
+      }
+      output = {
+        phonemes: parsed.phonemes,
+        spans: parsed.spans.map(span => ({phonemes: span.phonemes})),
+      };
+    } catch (error) {
+      alert(`Please paste a valid misaki-rs G2pOutput JSON: ${error.message}`);
+      return;
+    }
+    generateBtn.disabled = true;
+    setGenerationStatus('Generating audio...');
+    worker.postMessage({
+      type: 'generateFromPhonemes',
+      input: output,
+      genConfig: {sid: speakerId, speed: parseFloat(speedInput.value)},
+    });
+    return;
+  }
 
   if (useGenerationConfig) {
     if (!referenceAudioInput.files || referenceAudioInput.files.length === 0) {
@@ -307,6 +337,16 @@ function createAudioTag(generateAudio) {
   clipContainer.appendChild(clipLabel);
   clipContainer.appendChild(saveButton);
   clipContainer.appendChild(deleteButton);
+  if (generateAudio.spanAlignments) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    const alignment = document.createElement('pre');
+    summary.textContent = 'Span alignments';
+    alignment.textContent = JSON.stringify(generateAudio.spanAlignments, null, 2);
+    details.appendChild(summary);
+    details.appendChild(alignment);
+    clipContainer.appendChild(details);
+  }
   soundClips.appendChild(clipContainer);
 
   audio.controls = true;

@@ -512,10 +512,7 @@ OfflineTts OfflineTts::Create(const OfflineTtsConfig &config) {
   c.model.kokoro.model = config.model.kokoro.model.c_str();
   c.model.kokoro.voices = config.model.kokoro.voices.c_str();
   c.model.kokoro.tokens = config.model.kokoro.tokens.c_str();
-  c.model.kokoro.data_dir = config.model.kokoro.data_dir.c_str();
   c.model.kokoro.length_scale = config.model.kokoro.length_scale;
-  c.model.kokoro.lexicon = config.model.kokoro.lexicon.c_str();
-  c.model.kokoro.lang = config.model.kokoro.lang.c_str();
 
   c.model.kitten.model = config.model.kitten.model.c_str();
   c.model.kitten.voices = config.model.kitten.voices.c_str();
@@ -650,6 +647,56 @@ GeneratedAudio OfflineTts::Generate(const std::string &text,
   return ans;
 }
 
+GeneratedAudio OfflineTts::GenerateFromPhonemes(
+    const PhonemeInput &input, const GenerationConfig &config,
+    OfflineTtsCallback callback /*= nullptr*/,
+    void *arg /*= nullptr*/) const {
+  SherpaOnnxGenerationConfig c{};
+  c.silence_scale = config.silence_scale;
+  c.speed = config.speed;
+  c.sid = config.sid;
+  c.reference_audio = config.reference_audio.data();
+  c.reference_audio_len = config.reference_audio.size();
+  c.reference_sample_rate = config.reference_sample_rate;
+  c.reference_text = config.reference_text.c_str();
+  c.num_steps = config.num_steps;
+
+  nlohmann::json j = config.extra;
+  std::string s = j.dump();
+  c.extra = s.c_str();
+
+  std::vector<SherpaOnnxPhonemeSpan> spans;
+  spans.reserve(input.spans.size());
+  for (const auto &span : input.spans) {
+    spans.push_back({span.phonemes.c_str()});
+  }
+  SherpaOnnxPhonemeInput phonemes{input.phonemes.c_str(), spans.data(),
+                                 static_cast<int32_t>(spans.size())};
+
+  const SherpaOnnxGeneratedAudio *audio =
+      SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+          p_, &phonemes, &c, callback, arg);
+
+  GeneratedAudio ans;
+  if (!audio) return ans;
+
+  ans.samples.assign(audio->samples, audio->samples + audio->n);
+  ans.sample_rate = audio->sample_rate;
+  if (audio->has_span_alignments) {
+    ans.span_alignments.emplace();
+    ans.span_alignments->reserve(audio->num_span_alignments);
+    for (int32_t i = 0; i < audio->num_span_alignments; ++i) {
+      const auto &row = audio->span_alignments[i];
+      ans.span_alignments->push_back(
+          {row.original_phonemes, row.inferred_phonemes, row.start_ts,
+           row.end_ts});
+    }
+  }
+
+  SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
+  return ans;
+}
+
 std::shared_ptr<GeneratedAudio> OfflineTts::Generate2(
     const std::string &text, int32_t sid /*= 0*/, float speed /*= 1.0*/,
     OfflineTtsCallback callback /*= nullptr*/, void *arg /*= nullptr*/) const {
@@ -658,6 +705,7 @@ std::shared_ptr<GeneratedAudio> OfflineTts::Generate2(
   GeneratedAudio *ans = new GeneratedAudio;
   ans->samples = std::move(audio.samples);
   ans->sample_rate = audio.sample_rate;
+  ans->span_alignments = std::move(audio.span_alignments);
 
   return std::shared_ptr<GeneratedAudio>(ans);
 }
@@ -670,6 +718,7 @@ std::shared_ptr<GeneratedAudio> OfflineTts::Generate2(
   GeneratedAudio *ans = new GeneratedAudio;
   ans->samples = std::move(audio.samples);
   ans->sample_rate = audio.sample_rate;
+  ans->span_alignments = std::move(audio.span_alignments);
 
   return std::shared_ptr<GeneratedAudio>(ans);
 }

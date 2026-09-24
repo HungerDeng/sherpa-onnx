@@ -5,11 +5,17 @@ package com.k2fsa.sherpa.onnx;
 public class GeneratedAudio {
     private final float[] samples;
     private final int sampleRate;
+    private final SpanAlignment[] spanAlignments;
 
     public GeneratedAudio(float[] samples, int sampleRate) {
+        this(samples, sampleRate, null);
+    }
+
+    public GeneratedAudio(float[] samples, int sampleRate, SpanAlignment[] spanAlignments) {
         LibraryLoader.maybeLoad();
         this.samples = samples;
         this.sampleRate = sampleRate;
+        this.spanAlignments = spanAlignments;
     }
 
     public int getSampleRate() {
@@ -18,6 +24,10 @@ public class GeneratedAudio {
 
     public float[] getSamples() {
         return samples;
+    }
+
+    public SpanAlignment[] getSpanAlignments() {
+        return spanAlignments;
     }
 
     // return true if saved successfully.

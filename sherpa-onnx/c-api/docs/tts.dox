@@ -19,16 +19,28 @@ It uses a model file and a voices binary file.
 @code
 SherpaOnnxOfflineTtsConfig config;
 memset(&config, 0, sizeof(config));
-config.model.kokoro.model = "./kokoro-en-v0_19/model.onnx";
-config.model.kokoro.voices = "./kokoro-en-v0_19/voices.bin";
-config.model.kokoro.tokens = "./kokoro-en-v0_19/tokens.txt";
-config.model.kokoro.data_dir = "./kokoro-en-v0_19/espeak-ng-data";
+config.model.kokoro.model = "./kokoro-multi-lang-v1_0/model.onnx";
+config.model.kokoro.voices = "./kokoro-multi-lang-v1_0/voices.bin";
+config.model.kokoro.tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
 config.model.num_threads = 2;
 
 const SherpaOnnxOfflineTts *tts = SherpaOnnxCreateOfflineTts(&config);
+
+SherpaOnnxPhonemeSpan spans[] = {{"ðə"}, {"pɹˈaɪs"}, {"ɪz"}};
+SherpaOnnxPhonemeInput input = {"ðə pɹˈaɪs ɪz", spans, 3};
+SherpaOnnxGenerationConfig generation = {0};
+generation.speed = 1.0f;
+const SherpaOnnxGeneratedAudio *audio =
+    SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+        tts, &input, &generation, NULL, NULL);
+// audio->span_alignments has one row per input span.
+SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
 @endcode
 
-Model package: `kokoro-en-v0_19` (English), `kokoro-multi-lang-v1_0` (multilingual)
+Use Kokoro v1.0 or v1.1 with a `pred_dur` ONNX output. The caller provides
+phonemes from a G2P engine such as misaki-rs; Kokoro does not accept raw text.
+The aggregate phonemes determine the audio. Spans determine alignment rows.
+Other TTS models return audio without span alignments.
 
 Example source: [kokoro-tts-en-c-api.c](https://github.com/k2-fsa/sherpa-onnx/blob/master/c-api-examples/kokoro-tts-en-c-api.c)
 

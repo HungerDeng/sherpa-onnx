@@ -36,11 +36,7 @@ pub struct OfflineTtsKokoroModelConfig {
     pub model: *const c_char,
     pub voices: *const c_char,
     pub tokens: *const c_char,
-    pub data_dir: *const c_char,
     pub length_scale: c_float,
-    pub dict_dir: *const c_char,
-    pub lexicon: *const c_char,
-    pub lang: *const c_char,
 }
 
 #[repr(C)]
@@ -124,6 +120,32 @@ pub struct SherpaOnnxGeneratedAudio {
     pub samples: *const f32,
     pub n: i32,
     pub sample_rate: i32,
+    pub has_span_alignments: i32,
+    pub span_alignments: *const SherpaOnnxSpanAlignment,
+    pub num_span_alignments: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SherpaOnnxPhonemeSpan {
+    pub phonemes: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SherpaOnnxPhonemeInput {
+    pub phonemes: *const c_char,
+    pub spans: *const SherpaOnnxPhonemeSpan,
+    pub num_spans: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SherpaOnnxSpanAlignment {
+    pub original_phonemes: *const c_char,
+    pub inferred_phonemes: *const c_char,
+    pub start_ts: c_float,
+    pub end_ts: c_float,
 }
 
 #[repr(C)]
@@ -140,8 +162,9 @@ pub struct SherpaOnnxGenerationConfig {
     pub extra: *const c_char,
 }
 
-pub type SherpaOnnxGeneratedAudioProgressCallbackWithArg =
-    Option<unsafe extern "C" fn(samples: *const f32, n: i32, progress: c_float, arg: *mut c_void) -> i32>;
+pub type SherpaOnnxGeneratedAudioProgressCallbackWithArg = Option<
+    unsafe extern "C" fn(samples: *const f32, n: i32, progress: c_float, arg: *mut c_void) -> i32,
+>;
 
 #[repr(C)]
 pub struct SherpaOnnxOfflineTts {
@@ -162,6 +185,14 @@ extern "C" {
     pub fn SherpaOnnxOfflineTtsGenerateWithConfig(
         tts: *const SherpaOnnxOfflineTts,
         text: *const c_char,
+        config: *const SherpaOnnxGenerationConfig,
+        callback: SherpaOnnxGeneratedAudioProgressCallbackWithArg,
+        arg: *mut c_void,
+    ) -> *const SherpaOnnxGeneratedAudio;
+
+    pub fn SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+        tts: *const SherpaOnnxOfflineTts,
+        input: *const SherpaOnnxPhonemeInput,
         config: *const SherpaOnnxGenerationConfig,
         callback: SherpaOnnxGeneratedAudioProgressCallbackWithArg,
         arg: *mut c_void,

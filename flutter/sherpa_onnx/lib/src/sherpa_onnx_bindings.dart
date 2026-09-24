@@ -217,13 +217,9 @@ final class SherpaOnnxOfflineTtsKokoroModelConfig extends Struct {
   external Pointer<Utf8> model;
   external Pointer<Utf8> voices;
   external Pointer<Utf8> tokens;
-  external Pointer<Utf8> dataDir;
 
   @Float()
   external double lengthScale;
-  external Pointer<Utf8> dictDir;
-  external Pointer<Utf8> lexicon;
-  external Pointer<Utf8> lang;
 }
 
 final class SherpaOnnxOfflineTtsKittenModelConfig extends Struct {
@@ -344,6 +340,37 @@ final class SherpaOnnxGeneratedAudio extends Struct {
 
   @Int32()
   external int sampleRate;
+
+  @Int32()
+  external int hasSpanAlignments;
+
+  external Pointer<SherpaOnnxSpanAlignment> spanAlignments;
+
+  @Int32()
+  external int numSpanAlignments;
+}
+
+final class SherpaOnnxPhonemeSpan extends Struct {
+  external Pointer<Utf8> phonemes;
+}
+
+final class SherpaOnnxPhonemeInput extends Struct {
+  external Pointer<Utf8> phonemes;
+  external Pointer<SherpaOnnxPhonemeSpan> spans;
+
+  @Int32()
+  external int numSpans;
+}
+
+final class SherpaOnnxSpanAlignment extends Struct {
+  external Pointer<Utf8> originalPhonemes;
+  external Pointer<Utf8> inferredPhonemes;
+
+  @Float()
+  external double startTs;
+
+  @Float()
+  external double endTs;
 }
 
 final class SherpaOnnxFeatureConfig extends Struct {
@@ -1341,6 +1368,24 @@ typedef SherpaOnnxOfflineTtsGenerateWithConfig =
       Pointer<Void>,
     );
 
+typedef SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfigNative =
+    Pointer<SherpaOnnxGeneratedAudio> Function(
+      Pointer<SherpaOnnxOfflineTts>,
+      Pointer<SherpaOnnxPhonemeInput>,
+      Pointer<SherpaOnnxGenerationConfig>,
+      Pointer<NativeFunction<SherpaOnnxGeneratedAudioProgressCallbackWithArgNative>>,
+      Pointer<Void>,
+    );
+
+typedef SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig =
+    Pointer<SherpaOnnxGeneratedAudio> Function(
+      Pointer<SherpaOnnxOfflineTts>,
+      Pointer<SherpaOnnxPhonemeInput>,
+      Pointer<SherpaOnnxGenerationConfig>,
+      Pointer<NativeFunction<SherpaOnnxGeneratedAudioProgressCallbackWithArgNative>>,
+      Pointer<Void>,
+    );
+
 typedef CreateOfflineRecognizerNative =
     Pointer<SherpaOnnxOfflineRecognizer> Function(
       Pointer<SherpaOnnxOfflineRecognizerConfig>,
@@ -1975,6 +2020,8 @@ class SherpaOnnxBindings {
   offlineTtsGenerateWithCallback;
 
   static SherpaOnnxOfflineTtsGenerateWithConfig? offlineTtsGenerateWithConfig;
+  static SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig?
+      offlineTtsGenerateFromPhonemesWithConfig;
 
   static CreateOfflineRecognizer? createOfflineRecognizer;
   static DestroyOfflineRecognizer? destroyOfflineRecognizer;
@@ -2482,6 +2529,12 @@ class SherpaOnnxBindings {
     offlineTtsGenerateWithConfig ??= dynamicLibrary
         .lookup<NativeFunction<SherpaOnnxOfflineTtsGenerateWithConfigNative>>(
           'SherpaOnnxOfflineTtsGenerateWithConfig',
+        )
+        .asFunction();
+
+    offlineTtsGenerateFromPhonemesWithConfig ??= dynamicLibrary
+        .lookup<NativeFunction<SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfigNative>>(
+          'SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig',
         )
         .asFunction();
 

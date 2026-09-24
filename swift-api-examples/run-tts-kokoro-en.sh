@@ -7,13 +7,9 @@ if [ ! -d ../build-macos ]; then
   exit 1
 fi
 
-# please visit
-# https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html
-# to download more models
-if [ ! -f ./kokoro-en-v0_19/model.onnx ]; then
-  curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-  tar xf kokoro-en-v0_19.tar.bz2
-  rm kokoro-en-v0_19.tar.bz2
+if [ ! -f ./kokoro-multi-lang-v1_0/model.onnx ]; then
+  echo "Provide a Kokoro v1.0 model exported with pred_dur at ./kokoro-multi-lang-v1_0/"
+  exit 1
 fi
 
 if [ ! -e ./tts-kokoro-en ] || [ ../build-macos/install/lib/libsherpa-onnx-c-api.a -nt ./tts-kokoro-en ]; then

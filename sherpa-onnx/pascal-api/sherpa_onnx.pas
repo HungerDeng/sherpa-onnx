@@ -95,11 +95,7 @@ type
     Model: AnsiString;
     Voices: AnsiString;
     Tokens: AnsiString;
-    DataDir: AnsiString;
     LengthScale: Single;
-    DictDir: AnsiString;
-    Lexicon: AnsiString;
-    Lang: AnsiString;
 
     function ToString: AnsiString;
     class operator Initialize({$IFDEF FPC}var{$ELSE}out{$ENDIF} Dest: TSherpaOnnxOfflineTtsKokoroModelConfig);
@@ -185,9 +181,27 @@ type
     class operator Initialize({$IFDEF FPC}var{$ELSE}out{$ENDIF} Dest: TSherpaOnnxOfflineTtsConfig);
   end;
 
+  TSherpaOnnxPhonemeSpan = record
+    Phonemes: AnsiString;
+  end;
+
+  TSherpaOnnxPhonemeInput = record
+    Phonemes: AnsiString;
+    Spans: array of TSherpaOnnxPhonemeSpan;
+  end;
+
+  TSherpaOnnxSpanAlignment = record
+    OriginalPhonemes: AnsiString;
+    InferredPhonemes: AnsiString;
+    StartTs: Single;
+    EndTs: Single;
+  end;
+
   TSherpaOnnxGeneratedAudio = record
     Samples: array of Single;
     SampleRate: Integer;
+    HasSpanAlignments: Boolean;
+    SpanAlignments: array of TSherpaOnnxSpanAlignment;
   end;
 
   TSherpaOnnxOfflineTts = class
@@ -214,6 +228,14 @@ type
       Callback: TSherpaOnnxGeneratedAudioProgressCallbackWithArg;
       Arg: Pointer
       ): TSherpaOnnxGeneratedAudio; overload;
+
+    function GenerateFromPhonemes(Input: TSherpaOnnxPhonemeInput;
+      SpeakerId: Integer; Speed: Single): TSherpaOnnxGeneratedAudio; overload;
+
+    function GenerateFromPhonemes(Input: TSherpaOnnxPhonemeInput;
+      GenerationConfig: TSherpaOnnxGenerationConfig;
+      Callback: TSherpaOnnxGeneratedAudioProgressCallbackWithArg;
+      Arg: Pointer): TSherpaOnnxGeneratedAudio; overload;
 
     property GetHandle: Pointer Read Handle;
     property GetSampleRate: Integer Read SampleRate;
@@ -1175,11 +1197,7 @@ type
     Model: PAnsiChar;
     Voices: PAnsiChar;
     Tokens: PAnsiChar;
-    DataDir: PAnsiChar;
     LengthScale: cfloat;
-    DictDir: PAnsiChar;
-    Lexicon: PAnsiChar;
-    Lang: PAnsiChar;
   end;
 
   SherpaOnnxOfflineTtsKittenModelConfig = record
@@ -1247,10 +1265,33 @@ type
 
   PSherpaOnnxOfflineTtsConfig = ^SherpaOnnxOfflineTtsConfig;
 
+  SherpaOnnxPhonemeSpan = record
+    Phonemes: PAnsiChar;
+  end;
+  PSherpaOnnxPhonemeSpan = ^SherpaOnnxPhonemeSpan;
+
+  SherpaOnnxPhonemeInput = record
+    Phonemes: PAnsiChar;
+    Spans: PSherpaOnnxPhonemeSpan;
+    NumSpans: cint32;
+  end;
+  PSherpaOnnxPhonemeInput = ^SherpaOnnxPhonemeInput;
+
+  SherpaOnnxSpanAlignment = record
+    OriginalPhonemes: PAnsiChar;
+    InferredPhonemes: PAnsiChar;
+    StartTs: cfloat;
+    EndTs: cfloat;
+  end;
+  PSherpaOnnxSpanAlignment = ^SherpaOnnxSpanAlignment;
+
   SherpaOnnxGeneratedAudio = record
     Samples: pcfloat;
     N: cint32;
     SampleRate: cint32;
+    HasSpanAlignments: cint32;
+    SpanAlignments: PSherpaOnnxSpanAlignment;
+    NumSpanAlignments: cint32;
   end;
 
   PSherpaOnnxGeneratedAudio = ^SherpaOnnxGeneratedAudio;
@@ -1489,6 +1530,12 @@ function SherpaOnnxOfflineTtsGenerateWithCallbackWithArg(Tts: Pointer;
 
 function SherpaOnnxOfflineTtsGenerateWithConfig(Tts: Pointer;
   Text: PAnsiChar; config: PSherpaOnnxGenerationConfig;
+  Callback: TSherpaOnnxGeneratedAudioProgressCallbackWithArg;
+  Arg: Pointer): PSherpaOnnxGeneratedAudio; cdecl;
+  external SherpaOnnxLibName;
+
+function SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(Tts: Pointer;
+  Input: PSherpaOnnxPhonemeInput; Config: PSherpaOnnxGenerationConfig;
   Callback: TSherpaOnnxGeneratedAudioProgressCallbackWithArg;
   Arg: Pointer): PSherpaOnnxGeneratedAudio; cdecl;
   external SherpaOnnxLibName;
@@ -2836,13 +2883,9 @@ begin
     'Model := %s, ' +
     'Voices := %s, ' +
     'Tokens := %s, ' +
-    'DataDir := %s, ' +
-    'LengthScale := %.2f, ' +
-    'Lexicon := %s, ' +
-    'Lang := %s' +
+    'LengthScale := %.2f' +
     ')',
-    [Self.Model, Self.Voices, Self.Tokens, Self.DataDir, Self.LengthScale,
-     Self.Lexicon, Self.Lang]);
+    [Self.Model, Self.Voices, Self.Tokens, Self.LengthScale]);
 end;
 
 class operator TSherpaOnnxOfflineTtsKokoroModelConfig.Initialize({$IFDEF FPC}var{$ELSE}out{$ENDIF} Dest: TSherpaOnnxOfflineTtsKokoroModelConfig);
@@ -3002,10 +3045,7 @@ begin
   C.Model.Kokoro.Model := PAnsiChar(Config.Model.Kokoro.Model);
   C.Model.Kokoro.Voices := PAnsiChar(Config.Model.Kokoro.Voices);
   C.Model.Kokoro.Tokens := PAnsiChar(Config.Model.Kokoro.Tokens);
-  C.Model.Kokoro.DataDir := PAnsiChar(Config.Model.Kokoro.DataDir);
   C.Model.Kokoro.LengthScale := Config.Model.Kokoro.LengthScale;
-  C.Model.Kokoro.Lexicon := PAnsiChar(Config.Model.Kokoro.Lexicon);
-  C.Model.Kokoro.Lang := PAnsiChar(Config.Model.Kokoro.Lang);
 
   C.Model.Kitten.Model := PAnsiChar(Config.Model.Kitten.Model);
   C.Model.Kitten.Voices := PAnsiChar(Config.Model.Kitten.Voices);
@@ -3063,6 +3103,8 @@ begin
 end;
 
 function ExtractGeneratedAudio(Audio: PSherpaOnnxGeneratedAudio): TSherpaOnnxGeneratedAudio;
+var
+  I: Integer;
 begin
   Result := Default(TSherpaOnnxGeneratedAudio);
 
@@ -3074,6 +3116,21 @@ begin
 
   if Audio^.N > 0 then
     Move(Audio^.Samples[0], Result.Samples[0], Audio^.N * SizeOf(Single));
+
+  Result.HasSpanAlignments := Audio^.HasSpanAlignments <> 0;
+  if Result.HasSpanAlignments then
+    begin
+      SetLength(Result.SpanAlignments, Audio^.NumSpanAlignments);
+      for I := 0 to Audio^.NumSpanAlignments - 1 do
+        begin
+          Result.SpanAlignments[I].OriginalPhonemes :=
+            AnsiString(Audio^.SpanAlignments[I].OriginalPhonemes);
+          Result.SpanAlignments[I].InferredPhonemes :=
+            AnsiString(Audio^.SpanAlignments[I].InferredPhonemes);
+          Result.SpanAlignments[I].StartTs := Audio^.SpanAlignments[I].StartTs;
+          Result.SpanAlignments[I].EndTs := Audio^.SpanAlignments[I].EndTs;
+        end;
+    end;
 
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(Audio);
 end;
@@ -3174,6 +3231,67 @@ begin
       FreeMem(CReferenceAudio);
   end;
 
+  Result := ExtractGeneratedAudio(Audio);
+end;
+
+function TSherpaOnnxOfflineTts.GenerateFromPhonemes(
+  Input: TSherpaOnnxPhonemeInput; SpeakerId: Integer;
+  Speed: Single): TSherpaOnnxGeneratedAudio;
+var
+  Config: TSherpaOnnxGenerationConfig;
+begin
+  Config := Default(TSherpaOnnxGenerationConfig);
+  Config.Sid := SpeakerId;
+  Config.Speed := Speed;
+  Result := GenerateFromPhonemes(Input, Config, nil, nil);
+end;
+
+function TSherpaOnnxOfflineTts.GenerateFromPhonemes(
+  Input: TSherpaOnnxPhonemeInput;
+  GenerationConfig: TSherpaOnnxGenerationConfig;
+  Callback: TSherpaOnnxGeneratedAudioProgressCallbackWithArg;
+  Arg: Pointer): TSherpaOnnxGeneratedAudio;
+var
+  CInput: SherpaOnnxPhonemeInput;
+  CSpans: array of SherpaOnnxPhonemeSpan;
+  C: SherpaOnnxGenerationConfig;
+  CReferenceAudio: pcfloat;
+  I: Integer;
+  Audio: PSherpaOnnxGeneratedAudio;
+begin
+  CInput := Default(SherpaOnnxPhonemeInput);
+  CInput.Phonemes := PAnsiChar(Input.Phonemes);
+  CInput.NumSpans := Length(Input.Spans);
+  SetLength(CSpans, CInput.NumSpans);
+  for I := 0 to CInput.NumSpans - 1 do
+    CSpans[I].Phonemes := PAnsiChar(Input.Spans[I].Phonemes);
+  if CInput.NumSpans > 0 then
+    CInput.Spans := @CSpans[0];
+
+  C := Default(SherpaOnnxGenerationConfig);
+  C.SilenceScale := GenerationConfig.SilenceScale;
+  C.Speed := GenerationConfig.Speed;
+  C.Sid := GenerationConfig.Sid;
+  CReferenceAudio := nil;
+  C.ReferenceAudioLen := Length(GenerationConfig.ReferenceAudio);
+  if C.ReferenceAudioLen > 0 then
+    begin
+      GetMem(CReferenceAudio, C.ReferenceAudioLen * SizeOf(Single));
+      Move(GenerationConfig.ReferenceAudio[0], CReferenceAudio[0],
+        C.ReferenceAudioLen * SizeOf(Single));
+      C.ReferenceAudio := CReferenceAudio;
+    end;
+  C.ReferenceSampleRate := GenerationConfig.ReferenceSampleRate;
+  C.ReferenceText := PAnsiChar(GenerationConfig.ReferenceText);
+  C.NumSteps := GenerationConfig.NumSteps;
+  C.Extra := PAnsiChar(GenerationConfig.Extra);
+  try
+    Audio := SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+      Self.Handle, @CInput, @C, Callback, Arg);
+  finally
+    if CReferenceAudio <> nil then
+      FreeMem(CReferenceAudio);
+  end;
   Result := ExtractGeneratedAudio(Audio);
 end;
 

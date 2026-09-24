@@ -1007,10 +1007,6 @@ type OfflineTtsKokoroModelConfig struct {
 	Model       string  // Path to the model for kokoro
 	Voices      string  // Path to the voices.bin for kokoro
 	Tokens      string  // Path to tokens.txt
-	DataDir     string  // Path to espeak-ng-data directory
-	DictDir     string  // unused
-	Lexicon     string  // Path to lexicon files
-	Lang        string  // Example: es for Spanish, fr-fr for French. Can be empty
 	LengthScale float32 // Please use 1.0 in general. Smaller -> Faster speech speed. Larger -> Slower speech speed
 }
 
@@ -1089,6 +1085,49 @@ type GeneratedAudio struct {
 	Samples []float32
 
 	SampleRate int
+	// Nil for other TTS models; Kokoro returns one entry per input span.
+	SpanAlignments []SpanAlignment
+}
+
+type PhonemeSpan struct {
+	Phonemes string
+}
+
+type PhonemeInput struct {
+	Phonemes string
+	Spans []PhonemeSpan
+}
+
+type SpanAlignment struct {
+	OriginalPhonemes string
+	InferredPhonemes string
+	StartTs float32
+	EndTs float32
+}
+
+func copyGeneratedAudio(audio *C.struct_SherpaOnnxGeneratedAudio) *GeneratedAudio {
+	if audio == nil {
+		return nil
+	}
+	n := int(audio.n)
+	result := &GeneratedAudio{
+		SampleRate: int(audio.sample_rate),
+		Samples: make([]float32, n),
+	}
+	copy(result.Samples, unsafe.Slice((*float32)(unsafe.Pointer(audio.samples)), n))
+	if audio.has_span_alignments != 0 {
+		count := int(audio.num_span_alignments)
+		result.SpanAlignments = make([]SpanAlignment, count)
+		for i, item := range unsafe.Slice(audio.span_alignments, count) {
+			result.SpanAlignments[i] = SpanAlignment{
+				OriginalPhonemes: C.GoString(item.original_phonemes),
+				InferredPhonemes: C.GoString(item.inferred_phonemes),
+				StartTs: float32(item.start_ts),
+				EndTs: float32(item.end_ts),
+			}
+		}
+	}
+	return result
 }
 
 type GenerationConfig struct {
@@ -1254,15 +1293,6 @@ func NewOfflineTts(config *OfflineTtsConfig) *OfflineTts {
 	c.model.kokoro.tokens = C.CString(config.Model.Kokoro.Tokens)
 	defer C.free(unsafe.Pointer(c.model.kokoro.tokens))
 
-	c.model.kokoro.data_dir = C.CString(config.Model.Kokoro.DataDir)
-	defer C.free(unsafe.Pointer(c.model.kokoro.data_dir))
-
-	c.model.kokoro.lexicon = C.CString(config.Model.Kokoro.Lexicon)
-	defer C.free(unsafe.Pointer(c.model.kokoro.lexicon))
-
-	c.model.kokoro.lang = C.CString(config.Model.Kokoro.Lang)
-	defer C.free(unsafe.Pointer(c.model.kokoro.lang))
-
 	c.model.kokoro.length_scale = C.float(config.Model.Kokoro.LengthScale)
 
 	// kitten
@@ -1389,21 +1419,7 @@ func (tts *OfflineTts) Generate(text string, sid int, speed float32) *GeneratedA
 
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	ans := &GeneratedAudio{}
-	ans.SampleRate = int(audio.sample_rate)
-	n := int(audio.n)
-	ans.Samples = make([]float32, n)
-
-	// see https://stackoverflow.com/questions/48756732/what-does-1-30c-yourtype-do-exactly-in-cgo
-	// :n:n means 0:n:n, means low:high:capacity
-	samples := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
-
-	copy(ans.Samples, samples)
-
-	return ans
+	return copyGeneratedAudio(audio)
 }
 
 // Deprecated: Use GenerateWithConfig() instead.
@@ -1488,19 +1504,7 @@ func (tts *OfflineTts) GenerateWithProgressCallback(
 	}
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	n := int(audio.n)
-	samples := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
-
-	ans := &GeneratedAudio{
-		SampleRate: int(audio.sample_rate),
-		Samples:    make([]float32, n),
-	}
-	copy(ans.Samples, samples)
-
-	return ans
+	return copyGeneratedAudio(audio)
 }
 
 func (tts *OfflineTts) GenerateWithConfig(
@@ -1578,22 +1582,79 @@ func (tts *OfflineTts) GenerateWithConfig(
 	}
 	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
 
-	n := int(audio.n)
-	arr := unsafe.Slice(
-		(*float32)(unsafe.Pointer(audio.samples)),
-		n,
-	)
+	return copyGeneratedAudio(audio)
+}
 
-	ans := &GeneratedAudio{
-		SampleRate: int(audio.sample_rate),
-		Samples:    make([]float32, n),
+// GenerateFromPhonemesWithConfig synthesizes Kokoro audio from precomputed
+// phonemes. The aggregate phonemes generate the audio; spans define alignment
+// rows in the returned audio.
+func (tts *OfflineTts) GenerateFromPhonemesWithConfig(
+	input PhonemeInput,
+	cfg *GenerationConfig,
+	cb sherpaOnnxGeneratedAudioProgressCallbackWithArg,
+) *GeneratedAudio {
+	if cfg == nil {
+		cfg = &GenerationConfig{Speed: 1}
 	}
-	copy(ans.Samples, arr)
-
-	return ans
+	phonemes := C.CString(input.Phonemes)
+	defer C.free(unsafe.Pointer(phonemes))
+	cSpans := make([]C.struct_SherpaOnnxPhonemeSpan, len(input.Spans))
+	for i, span := range input.Spans {
+		cSpans[i].phonemes = C.CString(span.Phonemes)
+		defer C.free(unsafe.Pointer(cSpans[i].phonemes))
+	}
+	var cInput C.struct_SherpaOnnxPhonemeInput
+	cInput.phonemes = phonemes
+	cInput.num_spans = C.int32_t(len(cSpans))
+	if len(cSpans) > 0 {
+		cInput.spans = &cSpans[0]
+	}
+	var cCfg C.struct_SherpaOnnxGenerationConfig
+	cCfg.silence_scale = C.float(cfg.SilenceScale)
+	cCfg.speed = C.float(cfg.Speed)
+	cCfg.sid = C.int32_t(cfg.Sid)
+	cCfg.num_steps = C.int32_t(cfg.NumSteps)
+	if len(cfg.ReferenceAudio) > 0 {
+		cCfg.reference_audio = (*C.float)(C.malloc(
+			C.size_t(len(cfg.ReferenceAudio)) * C.size_t(unsafe.Sizeof(C.float(0)))))
+		defer C.free(unsafe.Pointer(cCfg.reference_audio))
+		for i, value := range cfg.ReferenceAudio {
+			unsafe.Slice(cCfg.reference_audio, len(cfg.ReferenceAudio))[i] = C.float(value)
+		}
+		cCfg.reference_audio_len = C.int32_t(len(cfg.ReferenceAudio))
+		cCfg.reference_sample_rate = C.int32_t(cfg.ReferenceSampleRate)
+	}
+	if cfg.ReferenceText != "" {
+		cCfg.reference_text = C.CString(cfg.ReferenceText)
+		defer C.free(unsafe.Pointer(cCfg.reference_text))
+	}
+	if len(cfg.Extra) > 0 {
+		cCfg.extra = C.CString(string(cfg.Extra))
+		defer C.free(unsafe.Pointer(cCfg.extra))
+	}
+	var audio *C.struct_SherpaOnnxGeneratedAudio
+	if cb != nil {
+		h := cgo.NewHandle(cb)
+		defer h.Delete()
+		audio = C.SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+			tts.impl, &cInput, &cCfg,
+			C.SherpaOnnxGeneratedAudioProgressCallbackWithArg(
+				C._cgoGeneratedAudioProgressCallback), unsafe.Pointer(&h))
+	} else {
+		audio = C.SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+			tts.impl, &cInput, &cCfg, nil, nil)
+	}
+	if audio == nil {
+		return nil
+	}
+	defer C.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio)
+	return copyGeneratedAudio(audio)
 }
 
 func (audio *GeneratedAudio) Save(filename string) bool {
+	if audio == nil || len(audio.Samples) == 0 {
+		return false
+	}
 	s := C.CString(filename)
 	defer C.free(unsafe.Pointer(s))
 

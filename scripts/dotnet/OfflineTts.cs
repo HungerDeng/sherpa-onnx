@@ -1,10 +1,30 @@
 ﻿/// Copyright (c)  2024.5 by 东风破
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 
 namespace SherpaOnnx
 {
+    public class PhonemeSpan
+    {
+        public string Phonemes;
+    }
+
+    public class PhonemeInput
+    {
+        public string Phonemes;
+        public PhonemeSpan[] Spans;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativePhonemeInput
+    {
+        public IntPtr Phonemes;
+        public IntPtr Spans;
+        public int NumSpans;
+    }
+
     // IntPtr is actually a `const float*` from C++
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate int OfflineTtsCallback(IntPtr samples, int n);
@@ -51,6 +71,66 @@ namespace SherpaOnnx
                 if (audioHandle.HasValue)
                     audioHandle.Value.Free();
             }
+        }
+
+        public OfflineTtsGeneratedAudio GenerateFromPhonemes(
+            PhonemeInput input, float speed, int speakerId)
+        {
+            var config = new OfflineTtsGenerationConfig();
+            config.Speed = speed;
+            config.Sid = speakerId;
+            return GenerateFromPhonemesWithConfig(input, config, null);
+        }
+
+        public OfflineTtsGeneratedAudio GenerateFromPhonemesWithConfig(
+            PhonemeInput input, OfflineTtsGenerationConfig config,
+            OfflineTtsCallbackProgressWithArg callback)
+        {
+            if (input == null || input.Phonemes == null || input.Spans == null)
+                throw new ArgumentNullException("input");
+            var allocations = new List<IntPtr>();
+            GCHandle? audioHandle = null;
+            GCHandle callbackHandle = default(GCHandle);
+            try
+            {
+                var nativeInput = new NativePhonemeInput();
+                nativeInput.Phonemes = AllocUtf8(input.Phonemes, allocations);
+                nativeInput.NumSpans = input.Spans.Length;
+                if (input.Spans.Length > 0)
+                {
+                    nativeInput.Spans = Marshal.AllocHGlobal(IntPtr.Size * input.Spans.Length);
+                    allocations.Add(nativeInput.Spans);
+                    for (int i = 0; i < input.Spans.Length; ++i)
+                    {
+                        if (input.Spans[i] == null || input.Spans[i].Phonemes == null)
+                            throw new ArgumentException("Span phonemes cannot be null", "input");
+                        IntPtr value = AllocUtf8(input.Spans[i].Phonemes, allocations);
+                        Marshal.WriteIntPtr(nativeInput.Spans, i * IntPtr.Size, value);
+                    }
+                }
+                var nativeConfig = config.ToNative(out audioHandle);
+                if (callback != null)
+                    callbackHandle = GCHandle.Alloc(callback);
+                IntPtr result = SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+                    _handle.Handle, ref nativeInput, ref nativeConfig, callback,
+                    IntPtr.Zero);
+                return result == IntPtr.Zero ? null : new OfflineTtsGeneratedAudio(result);
+            }
+            finally
+            {
+                if (callbackHandle.IsAllocated) callbackHandle.Free();
+                if (audioHandle.HasValue) audioHandle.Value.Free();
+                foreach (IntPtr allocation in allocations) Marshal.FreeHGlobal(allocation);
+            }
+        }
+
+        private static IntPtr AllocUtf8(string value, List<IntPtr> allocations)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(value + "\0");
+            IntPtr p = Marshal.AllocHGlobal(bytes.Length);
+            Marshal.Copy(bytes, 0, p, bytes.Length);
+            allocations.Add(p);
+            return p;
         }
 
         public OfflineTtsGeneratedAudio GenerateWithCallback(
@@ -259,5 +339,11 @@ namespace SherpaOnnx
 
         [DllImport(Dll.Filename, CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr SherpaOnnxOfflineTtsGenerateWithConfig(IntPtr handle, [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.I1)] byte[] utf8Text, ref OfflineTtsGenerationConfig.NativeStruct config, OfflineTtsCallbackProgressWithArg callback, IntPtr arg);
+
+        [DllImport(Dll.Filename, CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+            IntPtr handle, ref NativePhonemeInput input,
+            ref OfflineTtsGenerationConfig.NativeStruct config,
+            OfflineTtsCallbackProgressWithArg callback, IntPtr arg);
     }
 }

@@ -8,7 +8,10 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.PhonemeInput
+import com.k2fsa.sherpa.onnx.PhonemeSpan
 import com.k2fsa.sherpa.onnx.getOfflineTtsConfig
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -18,6 +21,19 @@ const val MAX_TTS_SPEED = 5.0f
 
 object TtsEngine {
     var tts: OfflineTts? = null
+    val isKokoro: Boolean
+        get() = tts?.config?.model?.kokoro?.model?.isNotEmpty() == true
+
+    fun parsePhonemeInput(json: String): PhonemeInput {
+        val output = JSONObject(json)
+        val spans = output.getJSONArray("spans")
+        return PhonemeInput(
+            phonemes = output.getString("phonemes"),
+            spans = Array(spans.length()) { index ->
+                PhonemeSpan(spans.getJSONObject(index).getString("phonemes"))
+            },
+        )
+    }
 
     // https://en.wikipedia.org/wiki/ISO_639-3
     // Example:
@@ -161,28 +177,15 @@ object TtsEngine {
         // lang = "eng"
 
         // Example 9
-        // kokoro-en-v0_19
-        // modelDir = "kokoro-en-v0_19"
-        // modelName = "model.onnx"
-        // voices = "voices.bin"
-        // dataDir = "kokoro-en-v0_19/espeak-ng-data"
-        // lang = "eng"
-
-        // Example 10
         // kokoro-multi-lang-v1_0
+        // Re-export model.onnx with pred_dur before using the phoneme-only API.
         // modelDir = "kokoro-multi-lang-v1_0"
         // modelName = "model.onnx"
         // voices = "voices.bin"
-        // dataDir = "kokoro-multi-lang-v1_0/espeak-ng-data"
-        // lexicon = "kokoro-multi-lang-v1_0/lexicon-us-en.txt,kokoro-multi-lang-v1_0/lexicon-zh.txt"
         // lang = "eng"
-        // lang2 = "zho"
-        // ruleFsts = "$modelDir/phone-zh.fst,$modelDir/date-zh.fst,$modelDir/number-zh.fst"
-        //
-        // This model supports many languages, e.g., English, Chinese, etc.
-        // We set lang to eng here.
+        // lang is used by Android's TextToSpeech service, not Kokoro inference.
 
-        // Example 11
+        // Example 10
         // kitten-nano-en-v0_1-fp16
         // modelDir = "kitten-nano-en-v0_1-fp16"
         // modelName = "model.fp16.onnx"
@@ -191,7 +194,7 @@ object TtsEngine {
         // lang = "eng"
         // isKitten = true
 
-        // Example 12
+        // Example 11
         // matcha-icefall-zh-en
         // https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/matcha-icefall-zh-en.html
         // modelDir = "matcha-icefall-zh-en"
@@ -201,7 +204,7 @@ object TtsEngine {
         // lexicon = "lexicon.txt"
         // lang = "zho"
 
-        // Example 13
+        // Example 12
         // supertonic-3-tts (supports 31 languages, default: English)
         // https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models
         // modelDir = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11"

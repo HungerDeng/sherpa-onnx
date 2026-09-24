@@ -2306,22 +2306,14 @@ typedef struct SherpaOnnxOfflineTtsMatchaModelConfig {
 
 /** @brief Configuration for a Kokoro TTS model. */
 typedef struct SherpaOnnxOfflineTtsKokoroModelConfig {
-  /** Path to the Kokoro model, for example `./kokoro-en-v0_19/model.onnx`. */
+  /** Path to the Kokoro model. */
   const char *model;
   /** Path to the Kokoro voices file. */
   const char *voices;
   /** Path to the tokens file. */
   const char *tokens;
-  /** Optional path to espeak-ng-data. */
-  const char *data_dir;
   /** Speech rate scale. Values < 1 are slower; values > 1 are faster. */
   float length_scale;
-  /** Unused legacy field kept for ABI compatibility. */
-  const char *dict_dir;
-  /** Optional lexicon file. */
-  const char *lexicon;
-  /** Optional language hint. */
-  const char *lang;
 } SherpaOnnxOfflineTtsKokoroModelConfig;
 
 /** @brief Configuration for a Kitten TTS model. */
@@ -2412,7 +2404,7 @@ typedef struct SherpaOnnxOfflineTtsSupertonicModelConfig {
  * implementation-defined. Do not rely on any precedence rule.
  *
  * Concrete example model packages in this repository include:
- * - `kokoro-en-v0_19`
+ * - `kokoro-multi-lang-v1_0` exported with `pred_dur`
  * - `sherpa-onnx-pocket-tts-int8-2026-01-26`
  * - `matcha-icefall-en_US-ljspeech`
  * - `sherpa-onnx-zipvoice-distill-int8-zh-en-emilia`
@@ -2447,10 +2439,9 @@ typedef struct SherpaOnnxOfflineTtsModelConfig {
  * SherpaOnnxOfflineTtsConfig config;
  * memset(&config, 0, sizeof(config));
  *
- * config.model.kokoro.model = "./kokoro-en-v0_19/model.onnx";
- * config.model.kokoro.voices = "./kokoro-en-v0_19/voices.bin";
- * config.model.kokoro.tokens = "./kokoro-en-v0_19/tokens.txt";
- * config.model.kokoro.data_dir = "./kokoro-en-v0_19/espeak-ng-data";
+ * config.model.kokoro.model = "./kokoro-multi-lang-v1_0/model.onnx";
+ * config.model.kokoro.voices = "./kokoro-multi-lang-v1_0/voices.bin";
+ * config.model.kokoro.tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
  * config.model.num_threads = 2;
  * config.model.provider = "cpu";
  * config.model.debug = 0;
@@ -2474,10 +2465,21 @@ typedef struct SherpaOnnxOfflineTtsConfig {
 /**
  * @brief Generated waveform returned by TTS APIs.
  *
- * The returned structure owns @c samples. Free the whole object with
+ * The returned structure owns @c samples and any span alignments. Free it with
  * SherpaOnnxDestroyOfflineTtsGeneratedAudio().
  * @see SherpaOnnxOfflineTtsGenerateWithConfig, SherpaOnnxDestroyOfflineTtsGeneratedAudio
  */
+typedef struct SherpaOnnxSpanAlignment {
+  /** Exact phonemes from the corresponding caller-supplied span. */
+  char *original_phonemes;
+  /** Phonemes reconstructed from token IDs sent to the model. */
+  char *inferred_phonemes;
+  /** Start in seconds in the returned waveform, or -1 if not inferred. */
+  float start_ts;
+  /** End in seconds in the returned waveform, or -1 if not inferred. */
+  float end_ts;
+} SherpaOnnxSpanAlignment;
+
 typedef struct SherpaOnnxGeneratedAudio {
   /** Generated mono samples in the range [-1, 1]. */
   const float *samples;
@@ -2485,7 +2487,28 @@ typedef struct SherpaOnnxGeneratedAudio {
   int32_t n;
   /** Output sample rate. */
   int32_t sample_rate;
+  /** 1 for Kokoro, 0 for other TTS models. */
+  int32_t has_span_alignments;
+  /** One entry per caller-supplied span when @c has_span_alignments is 1. */
+  const SherpaOnnxSpanAlignment *span_alignments;
+  /** Number of entries in @c span_alignments. */
+  int32_t num_span_alignments;
 } SherpaOnnxGeneratedAudio;
+
+/** Borrowed Kokoro phoneme span. The string is copied during generation. */
+typedef struct SherpaOnnxPhonemeSpan {
+  const char *phonemes;
+} SherpaOnnxPhonemeSpan;
+
+/** Precomputed phonemes and caller-defined spans for Kokoro synthesis. */
+typedef struct SherpaOnnxPhonemeInput {
+  /** Aggregate phonemes used to generate speech. */
+  const char *phonemes;
+  /** Ordered spans used for the alignment result. */
+  const SherpaOnnxPhonemeSpan *spans;
+  /** Number of entries in @c spans. May be zero. */
+  int32_t num_spans;
+} SherpaOnnxPhonemeInput;
 
 /**
  * @brief Callback invoked during incremental generation.
@@ -2537,10 +2560,9 @@ typedef struct SherpaOnnxOfflineTts SherpaOnnxOfflineTts;
  * @code
  * SherpaOnnxOfflineTtsConfig config;
  * memset(&config, 0, sizeof(config));
- * config.model.kokoro.model = "./kokoro-en-v0_19/model.onnx";
- * config.model.kokoro.voices = "./kokoro-en-v0_19/voices.bin";
- * config.model.kokoro.tokens = "./kokoro-en-v0_19/tokens.txt";
- * config.model.kokoro.data_dir = "./kokoro-en-v0_19/espeak-ng-data";
+ * config.model.kokoro.model = "./kokoro-multi-lang-v1_0/model.onnx";
+ * config.model.kokoro.voices = "./kokoro-multi-lang-v1_0/voices.bin";
+ * config.model.kokoro.tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
  * config.model.num_threads = 2;
  *
  * const SherpaOnnxOfflineTts *tts = SherpaOnnxCreateOfflineTts(&config);
@@ -2759,8 +2781,9 @@ typedef struct SherpaOnnxGenerationConfig {
 /**
  * @brief Generate speech using the advanced configuration interface.
  *
- * This is the preferred API for new integrations. It supports callback-based
- * progress reporting and model-specific options such as reference audio.
+ * This text API supports callback-based progress reporting and model-specific
+ * options such as reference audio. Kokoro accepts precomputed phonemes through
+ * SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig() instead.
  *
  * @param tts A pointer returned by SherpaOnnxCreateOfflineTts().
  * @param text Input text.
@@ -2787,6 +2810,19 @@ typedef struct SherpaOnnxGenerationConfig {
 SHERPA_ONNX_API const SherpaOnnxGeneratedAudio *
 SherpaOnnxOfflineTtsGenerateWithConfig(
     const SherpaOnnxOfflineTts *tts, const char *text,
+    const SherpaOnnxGenerationConfig *config,
+    SherpaOnnxGeneratedAudioProgressCallbackWithArg callback, void *arg);
+
+/**
+ * @brief Generate Kokoro speech from phonemes prepared by the caller.
+ *
+ * All input pointers are borrowed for the duration of this call. The returned
+ * audio owns its samples and alignment strings. Other TTS models do not support
+ * this entry point. Returns NULL on invalid input or generation failure.
+ */
+SHERPA_ONNX_API const SherpaOnnxGeneratedAudio *
+SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+    const SherpaOnnxOfflineTts *tts, const SherpaOnnxPhonemeInput *input,
     const SherpaOnnxGenerationConfig *config,
     SherpaOnnxGeneratedAudioProgressCallbackWithArg callback, void *arg);
 

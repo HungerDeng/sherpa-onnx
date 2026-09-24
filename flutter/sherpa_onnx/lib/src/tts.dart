@@ -147,10 +147,7 @@ class OfflineTts {
     c.ref.model.kokoro.model = config.model.kokoro.model.toNativeUtf8();
     c.ref.model.kokoro.voices = config.model.kokoro.voices.toNativeUtf8();
     c.ref.model.kokoro.tokens = config.model.kokoro.tokens.toNativeUtf8();
-    c.ref.model.kokoro.dataDir = config.model.kokoro.dataDir.toNativeUtf8();
     c.ref.model.kokoro.lengthScale = config.model.kokoro.lengthScale;
-    c.ref.model.kokoro.lexicon = config.model.kokoro.lexicon.toNativeUtf8();
-    c.ref.model.kokoro.lang = config.model.kokoro.lang.toNativeUtf8();
 
     c.ref.model.kitten.model = config.model.kitten.model.toNativeUtf8();
     c.ref.model.kitten.voices = config.model.kitten.voices.toNativeUtf8();
@@ -239,9 +236,6 @@ class OfflineTts {
     calloc.free(c.ref.model.kitten.voices);
     calloc.free(c.ref.model.kitten.model);
 
-    calloc.free(c.ref.model.kokoro.lang);
-    calloc.free(c.ref.model.kokoro.lexicon);
-    calloc.free(c.ref.model.kokoro.dataDir);
     calloc.free(c.ref.model.kokoro.tokens);
     calloc.free(c.ref.model.kokoro.voices);
     calloc.free(c.ref.model.kokoro.model);
@@ -361,12 +355,78 @@ class OfflineTts {
       return GeneratedAudio(samples: Float32List(0), sampleRate: 0);
     }
 
+    return _copyGeneratedAudio(p);
+  }
+
+  /// Generate Kokoro speech from caller-supplied phonemes and spans.
+  GeneratedAudio generateFromPhonemes({
+    required PhonemeInput input,
+    OfflineTtsGenerationConfig? config,
+    int Function(Float32List samples, double progress)? onProgress,
+  }) {
+    final generate = SherpaOnnxBindings.offlineTtsGenerateFromPhonemesWithConfig;
+    if (generate == null) {
+      throw Exception('Please initialize sherpa-onnx first');
+    }
+    if (ptr == nullptr) {
+      return GeneratedAudio(samples: Float32List(0), sampleRate: 0);
+    }
+    final nativeInput = calloc<SherpaOnnxPhonemeInput>();
+    nativeInput.ref.phonemes = input.phonemes.toNativeUtf8();
+    nativeInput.ref.numSpans = input.spans.length;
+    if (input.spans.isNotEmpty) {
+      nativeInput.ref.spans = calloc<SherpaOnnxPhonemeSpan>(input.spans.length);
+      for (var i = 0; i < input.spans.length; ++i) {
+        nativeInput.ref.spans[i].phonemes = input.spans[i].phonemes.toNativeUtf8();
+      }
+    }
+    final generationConfig = config ?? OfflineTtsGenerationConfig();
+    final nativeConfig = generationConfig.toNative();
+    NativeCallable<SherpaOnnxGeneratedAudioProgressCallbackWithArgNative>? wrapper;
+    if (onProgress != null) {
+      wrapper = NativeCallable<SherpaOnnxGeneratedAudioProgressCallbackWithArgNative>.isolateLocal(
+        (Pointer<Float> samples, int n, double progress, Pointer<Void> arg) {
+          return onProgress(Float32List.fromList(samples.asTypedList(n)), progress);
+        }, exceptionalReturn: 0);
+    }
+    try {
+      final result = generate(ptr, nativeInput, nativeConfig,
+          wrapper?.nativeFunction ?? nullptr, nullptr);
+      if (result == nullptr) {
+        return GeneratedAudio(samples: Float32List(0), sampleRate: 0);
+      }
+      return _copyGeneratedAudio(result);
+    } finally {
+      wrapper?.close();
+      generationConfig.freeNative(nativeConfig);
+      for (var i = 0; i < input.spans.length; ++i) {
+        calloc.free(nativeInput.ref.spans[i].phonemes);
+      }
+      if (nativeInput.ref.spans != nullptr) calloc.free(nativeInput.ref.spans);
+      calloc.free(nativeInput.ref.phonemes);
+      calloc.free(nativeInput);
+    }
+  }
+
+  GeneratedAudio _copyGeneratedAudio(Pointer<SherpaOnnxGeneratedAudio> p) {
     final samples = Float32List.fromList(p.ref.samples.asTypedList(p.ref.n));
     final sampleRate = p.ref.sampleRate;
-
+    List<SpanAlignment>? alignments;
+    if (p.ref.hasSpanAlignments != 0) {
+      alignments = [];
+      for (var i = 0; i < p.ref.numSpanAlignments; ++i) {
+        final item = p.ref.spanAlignments[i];
+        alignments.add(SpanAlignment(
+          originalPhonemes: item.originalPhonemes.toDartString(),
+          inferredPhonemes: item.inferredPhonemes.toDartString(),
+          startTs: item.startTs,
+          endTs: item.endTs,
+        ));
+      }
+    }
     SherpaOnnxBindings.destroyOfflineTtsGeneratedAudio?.call(p);
-
-    return GeneratedAudio(samples: samples, sampleRate: sampleRate);
+    return GeneratedAudio(samples: samples, sampleRate: sampleRate,
+        spanAlignments: alignments);
   }
 
   /// Return the output sample rate reported by the model.

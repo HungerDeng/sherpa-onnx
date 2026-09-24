@@ -172,34 +172,31 @@ node ./test-offline-tts-kitten-en.js
 ## ./test-offline-tts-kokoro-en.js
 
 [./test-offline-tts-kokoro-en.js](./test-offline-tts-kokoro-en.js) shows how to use
-[kokoro-en-v0_19](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2)
-for text-to-speech.
-
-You can use the following command to run it:
+[Kokoro v1.0](../scripts/kokoro/v1.0) with phonemes from misaki-rs. Export
+the ONNX model with `pred_dur`, `tokens.txt`, and `voices.bin` first:
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-tar xf kokoro-en-v0_19.tar.bz2
-rm kokoro-en-v0_19.tar.bz2
-
+cd ../scripts/kokoro/v1.0 && ./run.sh && cd ../../../nodejs-examples
 node ./test-offline-tts-kokoro-en.js
 ```
 
 ## ./test-offline-tts-kokoro-zh-en.js
 
 [./test-offline-tts-kokoro-zh-en.js](./test-offline-tts-kokoro-zh-en.js) shows how to use
-[kokoro-multi-lang-v1_0](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2)
-for text-to-speech in Chinese and English.
-
-You can use the following command to run it:
+[Kokoro v1.1-zh](../scripts/kokoro/v1.1-zh) with phonemes from misaki-rs.
+Export the model with `pred_dur` first:
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
-tar xf kokoro-multi-lang-v1_0.tar.bz2
-rm kokoro-multi-lang-v1_0.tar.bz2
-
+cd ../scripts/kokoro/v1.1-zh && ./run.sh && cd ../../../nodejs-examples
 node ./test-offline-tts-kokoro-zh-en.js
 ```
+
+Both scripts use one of the supplied misaki-rs outputs by default. Pass a
+`G2pOutput` JSON file as the first argument to use your own output, for example
+`node ./test-offline-tts-kokoro-en.js output.json`. Only `phonemes` and
+`spans[].phonemes` go to the SDK; the result retains waveform samples, sample
+rate, and one alignment per supplied span. Use a sherpa-onnx package rebuilt
+with this phoneme API.
 
 ## ./test-offline-tts-matcha-zh.js
 

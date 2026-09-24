@@ -130,6 +130,17 @@ class TtsService : TextToSpeechService() {
         }
         Log.i(TAG, "text: $text, engineSpeed: $engineSpeed")
         val tts = TtsEngine.tts!!
+        val phonemeInput = if (TtsEngine.isKokoro && text.isNotBlank()) {
+            try {
+                TtsEngine.parsePhonemeInput(text)
+            } catch (e: Exception) {
+                Log.e(TAG, "Kokoro requires Misaki G2pOutput JSON with phonemes and spans", e)
+                callback.error()
+                return
+            }
+        } else {
+            null
+        }
 
         // Note that AudioFormat.ENCODING_PCM_FLOAT requires API level >= 24
         // callback.start(tts.sampleRate(), AudioFormat.ENCODING_PCM_FLOAT, 1)
@@ -157,12 +168,26 @@ class TtsService : TextToSpeechService() {
             return 1
         }
 
-        Log.i(TAG, "text: $text")
-        tts.generateWithConfigAndCallback(
-            text = text,
-            config = GenerationConfig(sid = TtsEngine.speakerId, speed = engineSpeed),
-            callback = ttsCallback,
-        )
+        val config = GenerationConfig(sid = TtsEngine.speakerId, speed = engineSpeed)
+        try {
+            if (phonemeInput != null) {
+                tts.generateFromPhonemes(
+                    input = phonemeInput,
+                    config = config,
+                    callback = ttsCallback,
+                )
+            } else {
+                tts.generateWithConfigAndCallback(
+                    text = text,
+                    config = config,
+                    callback = ttsCallback,
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "TTS generation failed", e)
+            callback.error()
+            return
+        }
 
         callback.done()
     }

@@ -39,6 +39,19 @@ public class OfflineTts {
         return generateImpl(ptr, text, sid, speed);
     }
 
+    /** Generates Kokoro audio from phonemes supplied by the caller. */
+    public GeneratedAudio generateFromPhonemes(PhonemeInput input, int sid, float speed) {
+        GenerationConfig config = new GenerationConfig();
+        config.setSid(sid);
+        config.setSpeed(speed);
+        return generateFromPhonemesImpl(ptr, input, config, null);
+    }
+
+    public GeneratedAudio generateFromPhonemes(PhonemeInput input, GenerationConfig config,
+                                                OfflineTtsCallback callback) {
+        return generateFromPhonemesImpl(ptr, input, config, callback);
+    }
+
     public GeneratedAudio generateWithCallback(String text, OfflineTtsCallback callback) {
         return generateWithCallback(text, 0, 1.0f, callback);
     }
@@ -138,6 +151,9 @@ public class OfflineTts {
             GenerationConfig config,
             OfflineTtsCallback callback
     );
+
+    private native GeneratedAudio generateFromPhonemesImpl(
+            long ptr, PhonemeInput input, GenerationConfig config, OfflineTtsCallback callback);
 
     private native long newFromFile(OfflineTtsConfig config);
 }
