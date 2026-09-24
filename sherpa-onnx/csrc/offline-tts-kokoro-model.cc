@@ -5,7 +5,9 @@
 #include "sherpa-onnx/csrc/offline-tts-kokoro-model.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -56,7 +58,7 @@ class OfflineTtsKokoroModel::Impl {
     return meta_data_;
   }
 
-  Ort::Value Run(Ort::Value x, int32_t sid, float speed) {
+  KokoroModelOutput Run(Ort::Value x, int32_t sid, float speed) {
     auto memory_info =
         Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
 
@@ -69,7 +71,6 @@ class OfflineTtsKokoroModel::Impl {
 
     // there is a 0 at the front and end of x
     int32_t len = static_cast<int32_t>(x_shape[1]) - 2;
-    int32_t num_speakers = meta_data_.num_speakers;
     int32_t dim0 = style_dim_[0];
     int32_t dim1 = style_dim_[2];
     if (len >= dim0) {
@@ -95,11 +96,13 @@ class OfflineTtsKokoroModel::Impl {
     std::array<Ort::Value, 3> inputs = {
         std::move(x), std::move(style_embedding), std::move(speed_tensor)};
 
-    auto out =
-        sess_->Run({}, input_names_ptr_.data(), inputs.data(), inputs.size(),
-                   output_names_ptr_.data(), output_names_ptr_.size());
+    static constexpr std::array<const char *, 2> kOutputNames = {
+        "audio", "pred_dur"};
+    auto out = sess_->Run({}, input_names_ptr_.data(), inputs.data(),
+                          inputs.size(), kOutputNames.data(),
+                          kOutputNames.size());
 
-    return std::move(out[0]);
+    return {std::move(out[0]), std::move(out[1])};
   }
 
  private:
@@ -118,6 +121,28 @@ class OfflineTtsKokoroModel::Impl {
     GetInputNames(sess_.get(), &input_names_, &input_names_ptr_);
 
     GetOutputNames(sess_.get(), &output_names_, &output_names_ptr_);
+    if (std::find(output_names_.begin(), output_names_.end(), "audio") ==
+            output_names_.end() ||
+        std::find(output_names_.begin(), output_names_.end(), "pred_dur") ==
+            output_names_.end()) {
+      throw std::runtime_error(
+          "Kokoro ONNX model must have audio and pred_dur outputs. "
+          "Re-export the model with predicted durations.");
+    }
+    for (size_t i = 0; i < output_names_.size(); ++i) {
+      if (output_names_[i] != "audio" && output_names_[i] != "pred_dur") {
+        continue;
+      }
+      auto expected = output_names_[i] == "audio"
+                          ? ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                          : ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+      if (sess_->GetOutputTypeInfo(i)
+              .GetTensorTypeAndShapeInfo()
+              .GetElementType() != expected) {
+        throw std::runtime_error("Kokoro ONNX output has an invalid type: " +
+                                 output_names_[i]);
+      }
+    }
     // get meta data
     Ort::ModelMetadata meta_data = sess_->GetModelMetadata();
     if (config_.debug) {
@@ -247,8 +272,9 @@ const OfflineTtsKokoroModelMetaData &OfflineTtsKokoroModel::GetMetaData()
   return impl_->GetMetaData();
 }
 
-Ort::Value OfflineTtsKokoroModel::Run(Ort::Value x, int64_t sid /*= 0*/,
-                                      float speed /*= 1.0*/) const {
+KokoroModelOutput OfflineTtsKokoroModel::Run(Ort::Value x,
+                                             int64_t sid /*= 0*/,
+                                             float speed /*= 1.0*/) const {
   return impl_->Run(std::move(x), sid, speed);
 }
 

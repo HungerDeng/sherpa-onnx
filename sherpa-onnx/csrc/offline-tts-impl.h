@@ -41,6 +41,13 @@ class OfflineTtsImpl {
     return {};
   }
 
+  virtual GeneratedAudio GenerateFromPhonemes(
+      const PhonemeInput &input, const GenerationConfig &config,
+      GeneratedAudioCallback callback = nullptr) const {
+    throw std::invalid_argument(
+        "Phoneme input is supported only by Kokoro TTS models");
+  }
+
   virtual GeneratedAudio Generate(
       const std::string &text, const std::string &prompt_text,
       const std::vector<float> &prompt_samples, int32_t sample_rate,

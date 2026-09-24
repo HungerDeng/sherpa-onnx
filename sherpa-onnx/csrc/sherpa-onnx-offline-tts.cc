@@ -5,9 +5,12 @@
 #include <chrono>  // NOLINT
 #include <cstdio>
 #include <fstream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
+#include "nlohmann/json.hpp"
 #include "sherpa-onnx/csrc/offline-tts.h"
 #include "sherpa-onnx/csrc/macros.h"
 #include "sherpa-onnx/csrc/parse-options.h"
@@ -18,6 +21,34 @@ static int32_t AudioCallback(const float * /*samples*/, int32_t n,
                              float progress) {
   printf("sample=%d, progress=%f\n", n, progress);
   return 1;
+}
+
+static sherpa_onnx::PhonemeInput ReadKokoroInputJson(
+    const std::string &filename) {
+  std::ifstream is(filename);
+  if (!is) {
+    throw std::runtime_error("Failed to open Kokoro input JSON: " + filename);
+  }
+
+  nlohmann::json value = nlohmann::json::parse(is);
+  if (!value.is_object() || !value.contains("phonemes") ||
+      !value["phonemes"].is_string() || !value.contains("spans") ||
+      !value["spans"].is_array()) {
+    throw std::invalid_argument(
+        "Kokoro input JSON must contain phonemes and spans[]");
+  }
+
+  sherpa_onnx::PhonemeInput input;
+  input.phonemes = value["phonemes"].get<std::string>();
+  for (const auto &span : value["spans"]) {
+    if (!span.is_object() || !span.contains("phonemes") ||
+        !span["phonemes"].is_string()) {
+      throw std::invalid_argument(
+          "Each Kokoro input span must contain phonemes");
+    }
+    input.spans.emplace_back(span["phonemes"].get<std::string>());
+  }
+  return input;
 }
 
 int main(int32_t argc, char *argv[]) {
@@ -90,6 +121,16 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/voco
  --output-filename=./generated-zipvoice.wav \
  "小米的价值观是真诚, 热爱. 真诚，就是不欺人也不自欺. 热爱, 就是全心投入并享受其中."
 
+Kokoro TTS (requires a model re-exported with pred_dur):
+
+./bin/sherpa-onnx-offline-tts \
+ --kokoro-model=./scripts/kokoro/v1.0/kokoro.onnx \
+ --kokoro-voices=./scripts/kokoro/v1.0/voices.bin \
+ --kokoro-tokens=./scripts/kokoro/v1.0/tokens.txt \
+ --kokoro-input-json=./scripts/kokoro/fixtures/misaki-price.json \
+ --sid=20 \
+ --output-filename=./generated-kokoro.wav
+
 It will generate a file specified by --output-filename.
 
 You can find more models at
@@ -102,6 +143,7 @@ or details.
 
   sherpa_onnx::ParseOptions po(kUsageMessage);
   std::string output_filename = "./generated.wav";
+  std::string kokoro_input_json;
   int32_t sid = 0;
   int32_t emotion_id = -1;
 
@@ -125,6 +167,10 @@ or details.
 
   po.Register("output-filename", &output_filename,
               "Path to save the generated audio");
+
+  po.Register("kokoro-input-json", &kokoro_input_json,
+              "Path to a misaki-rs G2pOutput JSON file for Kokoro. Only "
+              "phonemes and spans[].phonemes are read.");
 
   po.Register(
       "lang", &lang,
@@ -150,16 +196,20 @@ or details.
   config.Register(&po);
   po.Read(argc, argv);
 
-  if (po.NumArgs() == 0) {
-    fprintf(stderr, "Error: Please provide the text to generate audio.\n\n");
+  const bool is_kokoro_tts = !config.model.kokoro.model.empty();
+  if (is_kokoro_tts &&
+      (kokoro_input_json.empty() || po.NumArgs() != 0)) {
+    fprintf(stderr,
+            "Error: Kokoro requires --kokoro-input-json and no positional "
+            "text argument.\n");
     po.PrintUsage();
     SHERPA_ONNX_EXIT(EXIT_FAILURE);
   }
-
-  if (po.NumArgs() > 1) {
+  if (!is_kokoro_tts &&
+      (!kokoro_input_json.empty() || po.NumArgs() != 1)) {
     fprintf(stderr,
-            "Error: Accept only one positional argument. Please use single "
-            "quotes to wrap your text.\n");
+            "Error: Non-Kokoro TTS requires one positional text argument "
+            "and no --kokoro-input-json.\n");
     po.PrintUsage();
     SHERPA_ONNX_EXIT(EXIT_FAILURE);
   }
@@ -173,7 +223,23 @@ or details.
     SHERPA_ONNX_EXIT(EXIT_FAILURE);
   }
 
-  sherpa_onnx::OfflineTts tts(config);
+  sherpa_onnx::PhonemeInput kokoro_input;
+  if (!kokoro_input_json.empty()) {
+    try {
+      kokoro_input = ReadKokoroInputJson(kokoro_input_json);
+    } catch (const std::exception &e) {
+      fprintf(stderr, "Invalid Kokoro input JSON: %s\n", e.what());
+      return EXIT_FAILURE;
+    }
+  }
+
+  std::unique_ptr<sherpa_onnx::OfflineTts> tts;
+  try {
+    tts = std::make_unique<sherpa_onnx::OfflineTts>(config);
+  } catch (const std::exception &e) {
+    fprintf(stderr, "Failed to initialize TTS: %s\n", e.what());
+    return EXIT_FAILURE;
+  }
 
   const auto begin = std::chrono::steady_clock::now();
   sherpa_onnx::GeneratedAudio audio;
@@ -222,7 +288,17 @@ or details.
     gen_config.reference_text = reference_text;
   }
 
-  audio = tts.Generate(po.GetArg(1), gen_config, AudioCallback);
+  if (!kokoro_input_json.empty()) {
+    try {
+      audio = tts->GenerateFromPhonemes(kokoro_input, gen_config,
+                                       AudioCallback);
+    } catch (const std::exception &e) {
+      fprintf(stderr, "Kokoro generation failed: %s\n", e.what());
+      return EXIT_FAILURE;
+    }
+  } else {
+    audio = tts->Generate(po.GetArg(1), gen_config, AudioCallback);
+  }
 
   const auto end = std::chrono::steady_clock::now();
 
@@ -243,8 +319,18 @@ or details.
   fprintf(stderr, "Number of threads: %d\n", config.model.num_threads);
   fprintf(stderr, "Elapsed seconds: %.3f s\n", elapsed_seconds);
   fprintf(stderr, "Audio duration: %.3f s\n", duration);
+  fprintf(stderr, "Sample rate: %d Hz\n", audio.sample_rate);
   fprintf(stderr, "Real-time factor (RTF): %.3f/%.3f = %.3f\n", elapsed_seconds,
           duration, rtf);
+
+  if (audio.span_alignments) {
+    for (size_t i = 0; i < audio.span_alignments->size(); ++i) {
+      const auto &span = (*audio.span_alignments)[i];
+      fprintf(stderr, "Span %zu: %s -> %s, %.3f to %.3f s\n", i,
+              span.original_phonemes.c_str(), span.inferred_phonemes.c_str(),
+              span.start_ts, span.end_ts);
+    }
+  }
 
   bool ok = sherpa_onnx::WriteWave(output_filename, audio.sample_rate,
                                    audio.samples.data(), audio.samples.size());
@@ -253,8 +339,13 @@ or details.
     SHERPA_ONNX_EXIT(EXIT_FAILURE);
   }
 
-  fprintf(stderr, "The text is: %s. Speaker ID: %d\n", po.GetArg(1).c_str(),
-          sid);
+  if (!kokoro_input_json.empty()) {
+    fprintf(stderr, "Kokoro input JSON: %s. Speaker ID: %d\n",
+            kokoro_input_json.c_str(), sid);
+  } else {
+    fprintf(stderr, "The text is: %s. Speaker ID: %d\n", po.GetArg(1).c_str(),
+            sid);
+  }
   fprintf(stderr, "Saved to %s successfully!\n", output_filename.c_str());
 
   return 0;

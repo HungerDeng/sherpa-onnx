@@ -161,30 +161,7 @@ def get_models():
             git diff
             """,
         ),
-        Model(
-            model_name="kokoro-multi-lang-v1_0",
-            hf="k2-fsa/web-assembly-tts-sherpa-onnx-zh-en-kokoro",
-            ms="csukuangfj/web-assembly-tts-sherpa-onnx-zh-en-kokoro",
-            cmd="""
-            pushd $model_name
-
-            mv -v model.onnx ../
-            mv -v voices.bin ../
-            mv -v tokens.txt ../
-            mv -v lexicon-us-en.txt ../
-            mv -v lexicon-zh.txt ../
-            mv -v espeak-ng-data ../
-            mv -v *.fst ../
-            popd
-
-            git checkout .
-
-            sed -i.bak 's/let modelType = 0/let modelType = 7/g' ../sherpa-onnx-tts.js
-
-            rm -rf $model_name
-            git diff
-            """,
-        ),
+        # Restore Kokoro deployment after the hosted model includes pred_dur.
         Model(
             model_name="sherpa-onnx-pocket-tts-int8-2026-01-26",
             hf="k2-fsa/web-assembly-en-tts-pocket",

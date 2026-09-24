@@ -232,42 +232,6 @@ static std::vector<std::vector<int64_t>> PiperPhonemesToIdsMatcha(
   return ans;
 }
 
-static std::vector<std::vector<int64_t>> PiperPhonemesToIdsKokoroOrKitten(
-    const std::unordered_map<char32_t, int32_t> &token2id,
-    const std::vector<piper::Phoneme> &phonemes, int32_t max_len) {
-  std::vector<std::vector<int64_t>> ans;
-
-  std::vector<int64_t> current;
-  current.reserve(phonemes.size());
-
-  current.push_back(0);
-
-  for (auto p : phonemes) {
-    // SHERPA_ONNX_LOGE("%d %s", static_cast<int32_t>(p), ToString(p).c_str());
-    if (token2id.count(p)) {
-      if (current.size() > max_len - 1) {
-        current.push_back(0);
-        ans.push_back(std::move(current));
-
-        current.reserve(phonemes.size());
-        current.push_back(0);
-      }
-
-      current.push_back(token2id.at(p));
-      if (p == '.') {
-        current.push_back(token2id.at(' '));
-      }
-    } else {
-      SHERPA_ONNX_LOGE("Skip unknown phonemes. Unicode codepoint: \\U+%04x.",
-                       static_cast<uint32_t>(p));
-    }
-  }
-
-  current.push_back(0);
-  ans.push_back(std::move(current));
-  return ans;
-}
-
 static std::vector<std::vector<int64_t>> PiperPhonemesToIdsKitten(
     const std::unordered_map<char32_t, int32_t> &token2id,
     const std::vector<piper::Phoneme> &phonemes,
@@ -401,10 +365,6 @@ void InitEspeak(const std::string &data_dir) {
   });
 }
 
-std::vector<TokenIDs> ConvertTextToTokenIdsKokoroOrKitten(
-    const std::unordered_map<char32_t, int32_t> &token2id,
-    int32_t max_token_len, const std::string &text, const std::string &voice);
-
 std::vector<TokenIDs> ConvertTextToTokenIdsKitten(
     const std::unordered_map<char32_t, int32_t> &token2id,
     const OfflineTtsKittenModelMetaData &meta_data, const std::string &text,
@@ -453,18 +413,6 @@ PiperPhonemizeLexicon::PiperPhonemizeLexicon(
 
 PiperPhonemizeLexicon::PiperPhonemizeLexicon(
     const std::string &tokens, const std::string &data_dir,
-    const OfflineTtsKokoroModelMetaData &kokoro_meta_data)
-    : kokoro_meta_data_(kokoro_meta_data), is_kokoro_(true) {
-  {
-    auto is = OpenInputFile(tokens);
-    token2id_ = ReadTokens(is);
-  }
-
-  InitEspeak(data_dir);
-}
-
-PiperPhonemizeLexicon::PiperPhonemizeLexicon(
-    const std::string &tokens, const std::string &data_dir,
     const OfflineTtsKittenModelMetaData &kitten_meta_data)
     : kitten_meta_data_(kitten_meta_data), is_kitten_(true) {
   {
@@ -480,23 +428,6 @@ PiperPhonemizeLexicon::PiperPhonemizeLexicon(
     Manager *mgr, const std::string &tokens, const std::string &data_dir,
     const OfflineTtsMatchaModelMetaData &matcha_meta_data)
     : matcha_meta_data_(matcha_meta_data), is_matcha_(true) {
-  {
-    auto buf = ReadFile(mgr, tokens);
-    std::istringstream is(std::string(buf.data(), buf.size()));
-    token2id_ = ReadTokens(is);
-  }
-
-  // We should copy the directory of espeak-ng-data from the asset to
-  // some internal or external storage and then pass the directory to
-  // data_dir.
-  InitEspeak(data_dir);
-}
-
-template <typename Manager>
-PiperPhonemizeLexicon::PiperPhonemizeLexicon(
-    Manager *mgr, const std::string &tokens, const std::string &data_dir,
-    const OfflineTtsKokoroModelMetaData &kokoro_meta_data)
-    : kokoro_meta_data_(kokoro_meta_data), is_kokoro_(true) {
   {
     auto buf = ReadFile(mgr, tokens);
     std::istringstream is(std::string(buf.data(), buf.size()));
@@ -530,9 +461,6 @@ std::vector<TokenIDs> PiperPhonemizeLexicon::ConvertTextToTokenIds(
     const std::string &text, const std::string &voice /*= ""*/) const {
   if (is_matcha_) {
     return ConvertTextToTokenIdsMatcha(text, voice);
-  } else if (is_kokoro_) {
-    return ConvertTextToTokenIdsKokoroOrKitten(
-        token2id_, kokoro_meta_data_.max_token_len, text, voice);
   } else if (is_kitten_) {
     return ConvertTextToTokenIdsKitten(token2id_, kitten_meta_data_, text,
                                        voice);
@@ -558,34 +486,6 @@ std::vector<TokenIDs> PiperPhonemizeLexicon::ConvertTextToTokenIdsMatcha(
   for (const auto &p : phonemes) {
     auto phoneme_ids =
         PiperPhonemesToIdsMatcha(token2id_, p, matcha_meta_data_.use_eos_bos);
-
-    for (auto &ids : phoneme_ids) {
-      ans.emplace_back(std::move(ids));
-    }
-  }
-
-  return ans;
-}
-
-std::vector<TokenIDs> ConvertTextToTokenIdsKokoroOrKitten(
-    const std::unordered_map<char32_t, int32_t> &token2id,
-    int32_t max_token_len, const std::string &text,
-    const std::string &voice /*= ""*/) {
-  piper::eSpeakPhonemeConfig config;
-
-  // ./bin/espeak-ng-bin --path  ./install/share/espeak-ng-data/ --voices
-  // to list available voices
-  config.voice = voice;  // e.g., voice is en-us
-
-  std::vector<std::vector<piper::Phoneme>> phonemes;
-
-  CallPhonemizeEspeak(text, config, &phonemes);
-
-  std::vector<TokenIDs> ans;
-
-  for (const auto &p : phonemes) {
-    auto phoneme_ids =
-        PiperPhonemesToIdsKokoroOrKitten(token2id, p, max_token_len);
 
     for (auto &ids : phoneme_ids) {
       ans.emplace_back(std::move(ids));
@@ -670,10 +570,6 @@ template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
 
 template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
     AAssetManager *mgr, const std::string &tokens, const std::string &data_dir,
-    const OfflineTtsKokoroModelMetaData &kokoro_meta_data);
-
-template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
-    AAssetManager *mgr, const std::string &tokens, const std::string &data_dir,
     const OfflineTtsKittenModelMetaData &kokoro_meta_data);
 #endif
 
@@ -687,11 +583,6 @@ template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
     NativeResourceManager *mgr, const std::string &tokens,
     const std::string &data_dir,
     const OfflineTtsMatchaModelMetaData &matcha_meta_data);
-
-template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
-    NativeResourceManager *mgr, const std::string &tokens,
-    const std::string &data_dir,
-    const OfflineTtsKokoroModelMetaData &kokoro_meta_data);
 
 template PiperPhonemizeLexicon::PiperPhonemizeLexicon(
     NativeResourceManager *mgr, const std::string &tokens,

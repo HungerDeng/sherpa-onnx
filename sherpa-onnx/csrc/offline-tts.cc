@@ -5,6 +5,7 @@
 #include "sherpa-onnx/csrc/offline-tts.h"
 
 #include <cmath>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <utility>
@@ -90,7 +91,40 @@ GeneratedAudio GeneratedAudio::ScaleSilence(float scale) const {
 
   GeneratedAudio ans;
   ans.sample_rate = sample_rate;
+  ans.span_alignments = span_alignments;
   ans.samples.reserve(samples.size());
+
+  if (ans.span_alignments && sample_rate > 0) {
+    // Map boundaries through the same piecewise silence transformation that
+    // is applied to the sample vector below.
+    auto map_sample = [&](float ts) -> float {
+      if (ts < 0) {
+        return ts;
+      }
+      float position = std::min(ts * sample_rate,
+                                static_cast<float>(num_samples));
+      float offset = 0;
+      for (const auto &interval : intervals) {
+        int32_t len = interval.end - interval.start;
+        int32_t scaled_len = static_cast<int32_t>(len * scale);
+        if (position < interval.start) {
+          break;
+        }
+        if (position <= interval.end) {
+          return (interval.start + offset +
+                  (position - interval.start) * scaled_len / len) /
+                 sample_rate;
+        }
+        offset += scaled_len - len;
+      }
+      return (position + offset) / sample_rate;
+    };
+
+    for (auto &alignment : *ans.span_alignments) {
+      alignment.start_ts = map_sample(alignment.start_ts);
+      alignment.end_ts = map_sample(alignment.end_ts);
+    }
+  }
 
   i = 0;
   for (const auto &interval : intervals) {
@@ -357,6 +391,12 @@ GeneratedAudio OfflineTts::Generate(
     return impl_->Generate(text, config, std::move(callback));
   }
 #endif
+}
+
+GeneratedAudio OfflineTts::GenerateFromPhonemes(
+    const PhonemeInput &input, const GenerationConfig &config,
+    GeneratedAudioCallback callback /*= nullptr*/) const {
+  return impl_->GenerateFromPhonemes(input, config, std::move(callback));
 }
 
 int32_t OfflineTts::SampleRate() const { return impl_->SampleRate(); }
