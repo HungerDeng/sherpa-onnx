@@ -5,6 +5,14 @@ using System.Text;
 
 namespace SherpaOnnx
 {
+    public class SpanAlignment
+    {
+        public string OriginalPhonemes { get; internal set; }
+        public string InferredPhonemes { get; internal set; }
+        public float StartTs { get; internal set; }
+        public float EndTs { get; internal set; }
+    }
+
     public class OfflineTtsGeneratedAudio
     {
         public OfflineTtsGeneratedAudio(IntPtr p)
@@ -50,6 +58,28 @@ namespace SherpaOnnx
             public IntPtr Samples;
             public int NumSamples;
             public int SampleRate;
+            public int HasSpanAlignments;
+            public IntPtr SpanAlignments;
+            public int NumSpanAlignments;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct NativeSpanAlignment
+        {
+            public IntPtr OriginalPhonemes;
+            public IntPtr InferredPhonemes;
+            public float StartTs;
+            public float EndTs;
+        }
+
+        private static string ReadUtf8(IntPtr p)
+        {
+            if (p == IntPtr.Zero) return "";
+            int n = 0;
+            while (Marshal.ReadByte(p, n) != 0) ++n;
+            byte[] bytes = new byte[n];
+            Marshal.Copy(p, bytes, 0, n);
+            return Encoding.UTF8.GetString(bytes);
         }
 
         private HandleRef _handle;
@@ -82,6 +112,30 @@ namespace SherpaOnnx
                 float[] samples = new float[impl.NumSamples];
                 Marshal.Copy(impl.Samples, samples, 0, impl.NumSamples);
                 return samples;
+            }
+        }
+
+        public SpanAlignment[] SpanAlignments
+        {
+            get
+            {
+                Impl impl = (Impl)Marshal.PtrToStructure(Handle, typeof(Impl));
+                if (impl.HasSpanAlignments == 0) return null;
+                var values = new SpanAlignment[impl.NumSpanAlignments];
+                int stride = Marshal.SizeOf(typeof(NativeSpanAlignment));
+                for (int i = 0; i < values.Length; ++i)
+                {
+                    IntPtr p = IntPtr.Add(impl.SpanAlignments, i * stride);
+                    var native = (NativeSpanAlignment)Marshal.PtrToStructure(
+                        p, typeof(NativeSpanAlignment));
+                    values[i] = new SpanAlignment {
+                        OriginalPhonemes = ReadUtf8(native.OriginalPhonemes),
+                        InferredPhonemes = ReadUtf8(native.InferredPhonemes),
+                        StartTs = native.StartTs,
+                        EndTs = native.EndTs,
+                    };
+                }
+                return values;
             }
         }
 

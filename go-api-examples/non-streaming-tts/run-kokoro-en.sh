@@ -4,20 +4,18 @@ set -ex
 
 export CGO_ENABLED=1
 
-if [ ! -f ./kokoro-en-v0_19/model.onnx ]; then
-  curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-  tar xf kokoro-en-v0_19.tar.bz2
-  rm kokoro-en-v0_19.tar.bz2
+if [ ! -f ../../scripts/kokoro/v1.0/kokoro.onnx ]; then
+  echo 'Export Kokoro v1.0 with pred_dur using scripts/kokoro/v1.0/run.sh.' >&2
+  exit 1
 fi
 
 go mod tidy
 go build
 
 ./non-streaming-tts \
-  --kokoro-model=./kokoro-en-v0_19/model.onnx \
-  --kokoro-voices=./kokoro-en-v0_19/voices.bin \
-  --kokoro-tokens=./kokoro-en-v0_19/tokens.txt \
-  --kokoro-data-dir=./kokoro-en-v0_19/espeak-ng-data \
+  --kokoro-model=../../scripts/kokoro/v1.0/kokoro.onnx \
+  --kokoro-voices=../../scripts/kokoro/v1.0/voices.bin \
+  --kokoro-tokens=../../scripts/kokoro/v1.0/tokens.txt \
+  --g2p-output=../../scripts/kokoro/fixtures/misaki-price.json \
   --debug=1 \
-  --output-filename=./test-kokoro-en.wav \
-  "Friends fell out often because life was changing so fast. The easiest thing in the world was to lose touch with someone."
+  --output-filename=./test-kokoro-en.wav

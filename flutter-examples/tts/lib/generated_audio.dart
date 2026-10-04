@@ -1,5 +1,6 @@
 // Copyright (c)  2026  Xiaomi Corporation
 import 'dart:typed_data';
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 /// Represents a generated audio item with metadata.
 class GeneratedAudioItem {
@@ -24,6 +25,9 @@ class GeneratedAudioItem {
   /// Generation ID to distinguish from previous generations.
   final int generationId;
 
+  /// One Kokoro alignment per caller-supplied phoneme span; null otherwise.
+  final List<sherpa_onnx.SpanAlignment>? spanAlignments;
+
   GeneratedAudioItem({
     required this.label,
     this.wavBytes,
@@ -32,6 +36,7 @@ class GeneratedAudioItem {
     required this.elapsed,
     required this.sampleRate,
     this.generationId = 0,
+    this.spanAlignments,
   });
 
   /// Create a label from input text (first 30 characters).

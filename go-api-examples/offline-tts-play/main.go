@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log"
 	"math"
@@ -94,6 +95,7 @@ func main() {
 	config := sherpa.OfflineTtsConfig{}
 	sid := 0
 	filename := "./generated.wav"
+	g2pOutputFile := ""
 
 	flag.StringVar(&config.Model.Vits.Model, "vits-model", "", "Path to the vits ONNX model")
 	flag.StringVar(&config.Model.Vits.Lexicon, "vits-lexicon", "", "Path to lexicon.txt")
@@ -116,9 +118,8 @@ func main() {
 	flag.StringVar(&config.Model.Kokoro.Model, "kokoro-model", "", "Path to the Kokoro ONNX model")
 	flag.StringVar(&config.Model.Kokoro.Voices, "kokoro-voices", "", "Path to voices.bin for Kokoro")
 	flag.StringVar(&config.Model.Kokoro.Tokens, "kokoro-tokens", "", "Path to tokens.txt for Kokoro")
-	flag.StringVar(&config.Model.Kokoro.DataDir, "kokoro-data-dir", "", "Path to espeak-ng-data for Kokoro")
-	flag.StringVar(&config.Model.Kokoro.Lexicon, "kokoro-lexicon", "", "Path to lexicon files for Kokoro")
 	flag.Float32Var(&config.Model.Kokoro.LengthScale, "kokoro-length-scale", 1.0, "length_scale for Kokoro. small -> faster in speech speed; large -> slower")
+	flag.StringVar(&g2pOutputFile, "g2p-output", "", "Path to misaki-rs G2pOutput JSON for Kokoro")
 
 	flag.StringVar(&config.Model.Kitten.Model, "kitten-model", "", "Path to the kitten ONNX model")
 	flag.StringVar(&config.Model.Kitten.Voices, "kitten-voices", "", "Path to voices.bin for kitten")
@@ -138,13 +139,27 @@ func main() {
 
 	flag.Parse()
 
-	if len(flag.Args()) != 1 {
-		log.Fatalf("Please provide the text to generate audio")
+	var text string
+	var phonemeInput sherpa.PhonemeInput
+	if config.Model.Kokoro.Model != "" {
+		if g2pOutputFile == "" || len(flag.Args()) != 0 {
+			log.Fatal("Kokoro requires --g2p-output and no text argument")
+		}
+		data, err := os.ReadFile(g2pOutputFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &phonemeInput); err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Input phonemes:", phonemeInput.Phonemes)
+	} else {
+		if len(flag.Args()) != 1 {
+			log.Fatal("Please provide the text to generate audio")
+		}
+		text = flag.Arg(0)
+		log.Println("Input text:", text)
 	}
-
-	text := flag.Arg(0)
-
-	log.Println("Input text:", text)
 	log.Println("Speaker ID:", sid)
 
 	log.Println("Initializing model (may take several seconds)")
@@ -188,27 +203,28 @@ func main() {
 	go func() {
 		defer pcmBuf.Finish()
 
-		generated = tts.GenerateWithConfig(
-			text,
-			&cfg,
-			func(samples []float32, progress float32) bool {
-				log.Printf("Progress: %.1f%%", progress*100)
+		callback := func(samples []float32, progress float32) bool {
+			log.Printf("Progress: %.1f%%", progress*100)
 
-				buf := make([]byte, len(samples)*2)
-				for i, s := range samples {
-					if s > 1 {
-						s = 1
-					} else if s < -1 {
-						s = -1
-					}
-					v := int16(math.Round(float64(s * 32767)))
-					binary.LittleEndian.PutUint16(buf[i*2:], uint16(v))
+			buf := make([]byte, len(samples)*2)
+			for i, s := range samples {
+				if s > 1 {
+					s = 1
+				} else if s < -1 {
+					s = -1
 				}
+				v := int16(math.Round(float64(s * 32767)))
+				binary.LittleEndian.PutUint16(buf[i*2:], uint16(v))
+			}
 
-				pcmBuf.Push(buf)
-				return true
-			},
-		)
+			pcmBuf.Push(buf)
+			return true
+		}
+		if config.Model.Kokoro.Model != "" {
+			generated = tts.GenerateFromPhonemesWithConfig(phonemeInput, &cfg, callback)
+		} else {
+			generated = tts.GenerateWithConfig(text, &cfg, callback)
+		}
 
 		log.Println("TTS generation finished in", time.Since(start))
 	}()

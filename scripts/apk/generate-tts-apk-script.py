@@ -538,57 +538,9 @@ def get_matcha_models() -> List[TtsModel]:
 
 
 def get_kokoro_models() -> List[TtsModel]:
-    english_models = [
-        TtsModel(
-            model_dir="kokoro-en-v0_19",
-            model_name="model.onnx",
-            lang="en",
-        )
-    ]
-    for m in english_models:
-        m.data_dir = f"{m.model_dir}/espeak-ng-data"
-        m.voices = "voices.bin"
-
-    multi_lingual_models = [
-        TtsModel(
-            model_dir="kokoro-multi-lang-v1_0",
-            model_name="model.onnx",
-            lang="en",
-            lang2="zh",
-        ),
-        TtsModel(
-            model_dir="kokoro-multi-lang-v1_1",
-            model_name="model.onnx",
-            lang="en",
-            lang2="zh",
-        ),
-        TtsModel(
-            model_dir="kokoro-int8-multi-lang-v1_1",
-            model_name="model.int8.onnx",
-            lang="en",
-            lang2="zh",
-        ),
-    ]
-
-    arabic_models = [
-        TtsModel(
-            model_dir="nabra-82m-arabic-int8",
-            model_name="model.int8.onnx",
-            lang="ar",
-            lang2="ar",
-        ),
-    ]
-    for m in multi_lingual_models:
-        m.data_dir = f"{m.model_dir}/espeak-ng-data"
-        m.voices = "voices.bin"
-        m.lexicon = f"{m.model_dir}/lexicon-us-en.txt,{m.model_dir}/lexicon-zh.txt"
-        m.rule_fsts = f"{m.model_dir}/phone-zh.fst,{m.model_dir}/date-zh.fst,{m.model_dir}/number-zh.fst"
-
-    for m in arabic_models:
-        m.data_dir = f"{m.model_dir}/espeak-ng-data"
-        m.voices = "voices.bin"
-
-    return english_models + multi_lingual_models + arabic_models
+    # Released Kokoro archives do not expose pred_dur. Add Kokoro APKs back
+    # after publishing re-exported models and a Misaki-backed frontend.
+    return []
 
 
 def get_kitten_models() -> List[TtsModel]:

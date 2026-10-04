@@ -98,10 +98,9 @@ final OfflineTtsConfig selectedTtsConfig = switch (selectedModelIndex) {
   4 => OfflineTtsConfig(
     model: OfflineTtsModelConfig(
       kokoro: OfflineTtsKokoroModelConfig(
-        model: 'kokoro-int8-en-v0_19/model.int8.onnx',
-        voices: 'kokoro-int8-en-v0_19/voices.bin',
-        tokens: 'kokoro-int8-en-v0_19/tokens.txt',
-        dataDir: 'kokoro-int8-en-v0_19/espeak-ng-data',
+        model: 'kokoro-multi-lang-v1_0/model.int8.onnx',
+        voices: 'kokoro-multi-lang-v1_0/voices.bin',
+        tokens: 'kokoro-multi-lang-v1_0/tokens.txt',
       ),
       numThreads: 2,
       debug: true,
@@ -117,8 +116,6 @@ final OfflineTtsConfig selectedTtsConfig = switch (selectedModelIndex) {
         model: 'kokoro-multi-lang-v1_0/model.onnx',
         voices: 'kokoro-multi-lang-v1_0/voices.bin',
         tokens: 'kokoro-multi-lang-v1_0/tokens.txt',
-        dataDir: 'kokoro-multi-lang-v1_0/espeak-ng-data',
-        lexicon: 'kokoro-multi-lang-v1_0/lexicon-us-en.txt,kokoro-multi-lang-v1_0/lexicon-zh.txt',
       ),
       numThreads: 2,
       debug: true,

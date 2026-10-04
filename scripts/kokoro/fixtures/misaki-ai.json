@@ -1,0 +1,16 @@
+{
+  "phonemes": "ˌeɪˈaɪ ɪz sˌoʊ ˈɔːsʌm. aɪ kˈænt lˈɪv wɪðˈaʊt ɪt.",
+  "spans": [
+    {"phonemes": "ˌeɪˈaɪ"},
+    {"phonemes": "ɪz"},
+    {"phonemes": "sˌoʊ"},
+    {"phonemes": "ˈɔːsʌm"},
+    {"phonemes": "."},
+    {"phonemes": "aɪ"},
+    {"phonemes": "kˈænt"},
+    {"phonemes": "lˈɪv"},
+    {"phonemes": "wɪðˈaʊt"},
+    {"phonemes": "ɪt"},
+    {"phonemes": "."}
+  ]
+}

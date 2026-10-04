@@ -2,7 +2,8 @@ import worker, { ThreadWorkerGlobalScope, MessageEvents, ErrorEvent } from '@oho
 
 import { fileIo as fs } from '@kit.CoreFileKit';
 
-import { OfflineTtsConfig, OfflineTts, listRawfileDir, TtsInput, TtsOutput } from 'sherpa_onnx';
+import { OfflineTtsConfig, OfflineTts, listRawfileDir, TtsInput, TtsOutput,
+  TtsPhonemeInput, TtsPhonemeSpan, TtsGenerationConfig } from 'sherpa_onnx';
 import { buffer } from '@kit.ArkTS';
 
 const workerPort: ThreadWorkerGlobalScope = worker.workerPort;
@@ -168,21 +169,11 @@ function initTts(context: Context): OfflineTts {
   // vocoder = 'vocos-22khz-univ.onnx';
   // dataDir = 'espeak-ng-data';
 
-  // Example 10
-  // https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html#kokoro-en-v0-19-english-11-speakers
-  // modelDir = 'kokoro-en-v0_19';
-  // modelName = 'model.onnx';
-  // voices = 'voices.bin'
-  // dataDir = 'espeak-ng-data';
-
-  // Example 11
+  // Example 10: re-export this model with pred_dur using scripts/kokoro/v1.0.
   // https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html
   // modelDir = 'kokoro-multi-lang-v1_0';
   // modelName = 'model.onnx';
   // voices = 'voices.bin'
-  // dataDir = 'espeak-ng-data';
-  // lexicon = 'lexicon-us-en.txt,lexicon-zh.txt';
-  // ruleFsts = `date-zh.fst,phone-zh.fst,number-zh.fst`;
 
   // ============================================================
   // Please don't change the remaining part of this function
@@ -277,8 +268,6 @@ function initTts(context: Context): OfflineTts {
   if (voices != '') {
     config.model.kokoro.voices = voices;
     config.model.kokoro.tokens = tokens;
-    config.model.kokoro.dataDir = dataDir;
-    config.model.kokoro.lexicon = lexicon;
   }
 
   config.model.numThreads = 2;
@@ -321,6 +310,7 @@ workerPort.onmessage = (e: MessageEvents) => {
       sampleRate: tts.sampleRate,
       numSpeakers: tts.numSpeakers,
       numThreads: tts.config.model.numThreads,
+      requiresPhonemes: tts.config.model.kokoro.model != '',
     });
   }
 
@@ -330,6 +320,36 @@ workerPort.onmessage = (e: MessageEvents) => {
 
   if (msgType == 'tts-generate') {
     const text = e.data['text'] as string;
+    if (tts.config.model.kokoro.model != '') {
+      try {
+        // The UI can pass the phoneme subset of a misaki-rs G2pOutput as
+        // JSON. Integrations may pass the parsed object in g2pOutput.
+        const supplied = (e.data['g2pOutput'] || JSON.parse(text)) as TtsPhonemeInput;
+        const input = new TtsPhonemeInput();
+        input.phonemes = supplied.phonemes;
+        input.spans = supplied.spans.map((span: TtsPhonemeSpan) => {
+          const value = new TtsPhonemeSpan();
+          value.phonemes = span.phonemes;
+          return value;
+        });
+        input.generationConfig = new TtsGenerationConfig();
+        input.generationConfig.sid = e.data['sid'] as number;
+        input.generationConfig.speed = e.data['speed'] as number;
+        const output = tts.generateFromPhonemes(input);
+        workerPort.postMessage({
+          'msgType': 'tts-generate-done',
+          samples: Float32Array.from(output.samples),
+          sampleRate: output.sampleRate,
+          spanAlignments: output.spanAlignments,
+        });
+      } catch (error) {
+        workerPort.postMessage({
+          'msgType': 'tts-generate-error',
+          message: 'Kokoro requires G2pOutput JSON with phonemes and spans[].phonemes',
+        });
+      }
+      return;
+    }
     console.log(`recevied text ${text}`);
     const input: TtsInput = new TtsInput();
     input.text = text;

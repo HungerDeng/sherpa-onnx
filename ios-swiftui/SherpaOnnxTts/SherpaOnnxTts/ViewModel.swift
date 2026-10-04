@@ -161,8 +161,8 @@ func getTtsFor_matcha_icefall_zh_baker() -> SherpaOnnxOfflineTtsWrapper {
   return SherpaOnnxOfflineTtsWrapper(config: &config)
 }
 
-func getTtsFor_kokoro_en_v0_19() -> SherpaOnnxOfflineTtsWrapper {
-  // please see https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html#kokoro-en-v0-19-english-11-speakers
+func getTtsFor_kokoro_multi_lang_v1_0() -> SherpaOnnxOfflineTtsWrapper {
+  // Bundle a v1.0 ONNX model re-exported with both audio and pred_dur outputs.
 
   let model = getResource("model", "onnx")
   let voices = getResource("voices", "bin")
@@ -170,43 +170,10 @@ func getTtsFor_kokoro_en_v0_19() -> SherpaOnnxOfflineTtsWrapper {
   // tokens.txt
   let tokens = getResource("tokens", "txt")
 
-  // in this case, we don't need lexicon.txt
-  let dataDir = resourceURL(to: "espeak-ng-data")
-
   let kokoro = sherpaOnnxOfflineTtsKokoroModelConfig(
-    model: model, voices: voices, tokens: tokens, dataDir: dataDir)
+    model: model, voices: voices, tokens: tokens)
   let modelConfig = sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro)
   var config = sherpaOnnxOfflineTtsConfig(model: modelConfig)
-
-  return SherpaOnnxOfflineTtsWrapper(config: &config)
-}
-
-func getTtsFor_kokoro_multi_lang_v1_0() -> SherpaOnnxOfflineTtsWrapper {
-  // please see https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html
-
-  let model = getResource("model", "onnx")
-  let voices = getResource("voices", "bin")
-
-  // tokens.txt
-  let tokens = getResource("tokens", "txt")
-
-  let lexicon_en = getResource("lexicon-us-en", "txt")
-  let lexicon_zh = getResource("lexicon-zh", "txt")
-  let lexicon = "\(lexicon_en),\(lexicon_zh)"
-
-  // in this case, we don't need lexicon.txt
-  let dataDir = resourceURL(to: "espeak-ng-data")
-
-  let numFst = getResource("number-zh", "fst")
-  let dateFst = getResource("date-zh", "fst")
-  let phoneFst = getResource("phone-zh", "fst")
-  let ruleFsts = "\(dateFst),\(phoneFst),\(numFst)"
-
-  let kokoro = sherpaOnnxOfflineTtsKokoroModelConfig(
-    model: model, voices: voices, tokens: tokens, dataDir: dataDir,
-    lexicon: lexicon)
-  let modelConfig = sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro)
-  var config = sherpaOnnxOfflineTtsConfig(model: modelConfig, ruleFsts: ruleFsts)
 
   return SherpaOnnxOfflineTtsWrapper(config: &config)
 }
@@ -237,24 +204,34 @@ func getTtsForSupertonic() -> SherpaOnnxOfflineTtsWrapper {
   return SherpaOnnxOfflineTtsWrapper(config: &config)
 }
 
+enum TtsExampleModel: Equatable {
+  case piperAmy
+  case kokoroV1
+  case supertonic
+  case matchaBaker
+  case vctk
+  case aishell3
+  case meloZhEn
+}
+
+// Change this selection after adding the corresponding model files to the app bundle.
+let selectedTtsExampleModel: TtsExampleModel = .piperAmy
+
 func createOfflineTts() -> SherpaOnnxOfflineTtsWrapper {
-  // Please enable only one of them
-
-  // return getTtsForSupertonic()
-
-  // return getTtsFor_kokoro_multi_lang_v1_0()
-
-  // return getTtsFor_kokoro_en_v0_19()
-
-  // return getTtsFor_matcha_icefall_zh_baker()
-
-  return getTtsFor_en_US_amy_low()
-
-  // return getTtsForVCTK()
-
-  // return getTtsForAishell3()
-
-  // return getTtsFor_zh_en_melo_tts()
-
-  // please add more models on need by following the above two examples
+  switch selectedTtsExampleModel {
+  case .piperAmy:
+    return getTtsFor_en_US_amy_low()
+  case .kokoroV1:
+    return getTtsFor_kokoro_multi_lang_v1_0()
+  case .supertonic:
+    return getTtsForSupertonic()
+  case .matchaBaker:
+    return getTtsFor_matcha_icefall_zh_baker()
+  case .vctk:
+    return getTtsForVCTK()
+  case .aishell3:
+    return getTtsForAishell3()
+  case .meloZhEn:
+    return getTtsFor_zh_en_melo_tts()
+  }
 }

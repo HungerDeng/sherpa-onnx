@@ -46,6 +46,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -901,15 +902,6 @@ struct OfflineTtsKokoroModelConfig {
   std::string voices;
   /** Token file. */
   std::string tokens;
-  /** Data directory such as `espeak-ng-data`. */
-  std::string data_dir;
-  /** Reserved field. Currently unused by the wrapper. */
-  std::string dict_dir;
-  /** Optional lexicon file. */
-  std::string lexicon;
-  /** Language/voice family hint. */
-  std::string lang;
-
   /** Length scale. Values < 1 are faster; values > 1 are slower. */
   float length_scale = 1.0;
 };
@@ -1058,12 +1050,33 @@ struct OfflineTtsConfig {
   float silence_scale = 0.2;
 };
 
+/** @brief Caller-supplied Kokoro phoneme segment. */
+struct PhonemeSpan {
+  std::string phonemes;
+};
+
+/** @brief Precomputed Kokoro phonemes and ordered segments. */
+struct PhonemeInput {
+  std::string phonemes;
+  std::vector<PhonemeSpan> spans;
+};
+
+/** @brief Kokoro timing and inferred phonemes for one supplied segment. */
+struct SpanAlignment {
+  std::string original_phonemes;
+  std::string inferred_phonemes;
+  float start_ts = -1.0f;
+  float end_ts = -1.0f;
+};
+
 /** @brief Generated audio returned by the C++ TTS wrapper. */
 struct GeneratedAudio {
   /** Output samples normalized to `[-1, 1]`. */
   std::vector<float> samples;
   /** Output sample rate in Hz. */
   int32_t sample_rate = 0;
+  /** Set for Kokoro and contains one entry per caller-supplied span. */
+  std::optional<std::vector<SpanAlignment>> span_alignments;
 };
 
 /**
@@ -1129,6 +1142,11 @@ class SHERPA_ONNX_API OfflineTts
                           const GenerationConfig &config,
                           OfflineTtsCallback callback = nullptr,
                           void *arg = nullptr) const;
+
+  /** @brief Generate Kokoro speech from precomputed phonemes. */
+  GeneratedAudio GenerateFromPhonemes(
+      const PhonemeInput &input, const GenerationConfig &config,
+      OfflineTtsCallback callback = nullptr, void *arg = nullptr) const;
 
   /** @brief Like Generate(), but returns a shared pointer to the result. */
   std::shared_ptr<GeneratedAudio> Generate2(

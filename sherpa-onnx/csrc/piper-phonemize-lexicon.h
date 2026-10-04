@@ -11,7 +11,6 @@
 
 #include "sherpa-onnx/csrc/offline-tts-frontend.h"
 #include "sherpa-onnx/csrc/offline-tts-kitten-model-meta-data.h"
-#include "sherpa-onnx/csrc/offline-tts-kokoro-model-meta-data.h"
 #include "sherpa-onnx/csrc/offline-tts-matcha-model-meta-data.h"
 #include "sherpa-onnx/csrc/offline-tts-vits-model-meta-data.h"
 
@@ -26,9 +25,6 @@ class PiperPhonemizeLexicon : public OfflineTtsFrontend {
                         const OfflineTtsMatchaModelMetaData &matcha_meta_data);
 
   PiperPhonemizeLexicon(const std::string &tokens, const std::string &data_dir,
-                        const OfflineTtsKokoroModelMetaData &kokoro_meta_data);
-
-  PiperPhonemizeLexicon(const std::string &tokens, const std::string &data_dir,
                         const OfflineTtsKittenModelMetaData &kitten_meta_data);
 
   template <typename Manager>
@@ -40,11 +36,6 @@ class PiperPhonemizeLexicon : public OfflineTtsFrontend {
   PiperPhonemizeLexicon(Manager *mgr, const std::string &tokens,
                         const std::string &data_dir,
                         const OfflineTtsMatchaModelMetaData &matcha_meta_data);
-
-  template <typename Manager>
-  PiperPhonemizeLexicon(Manager *mgr, const std::string &tokens,
-                        const std::string &data_dir,
-                        const OfflineTtsKokoroModelMetaData &kokoro_meta_data);
 
   template <typename Manager>
   PiperPhonemizeLexicon(Manager *mgr, const std::string &tokens,
@@ -66,10 +57,8 @@ class PiperPhonemizeLexicon : public OfflineTtsFrontend {
   std::unordered_map<char32_t, int32_t> token2id_;
   OfflineTtsVitsModelMetaData vits_meta_data_;
   OfflineTtsMatchaModelMetaData matcha_meta_data_;
-  OfflineTtsKokoroModelMetaData kokoro_meta_data_;
   OfflineTtsKittenModelMetaData kitten_meta_data_;
   bool is_matcha_ = false;
-  bool is_kokoro_ = false;
   bool is_kitten_ = false;
 };
 

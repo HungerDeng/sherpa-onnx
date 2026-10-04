@@ -49,9 +49,6 @@
     SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.model);             \
     SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.voices);            \
     SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.tokens);            \
-    SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.data_dir);          \
-    SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.lexicon);           \
-    SHERPA_ONNX_DELETE_C_STR(c.model.kokoro.lang);              \
                                                                 \
     SHERPA_ONNX_DELETE_C_STR(c.model.pocket.lm_flow);           \
     SHERPA_ONNX_DELETE_C_STR(c.model.pocket.lm_main);           \
@@ -182,10 +179,7 @@ static SherpaOnnxOfflineTtsKokoroModelConfig GetOfflineTtsKokoroModelConfig(
   SHERPA_ONNX_ASSIGN_ATTR_STR(model, model);
   SHERPA_ONNX_ASSIGN_ATTR_STR(voices, voices);
   SHERPA_ONNX_ASSIGN_ATTR_STR(tokens, tokens);
-  SHERPA_ONNX_ASSIGN_ATTR_STR(data_dir, dataDir);
   SHERPA_ONNX_ASSIGN_ATTR_FLOAT(length_scale, lengthScale);
-  SHERPA_ONNX_ASSIGN_ATTR_STR(lexicon, lexicon);
-  SHERPA_ONNX_ASSIGN_ATTR_STR(lang, lang);
 
   return c;
 }
@@ -524,6 +518,106 @@ static Napi::Number OfflineTtsNumSpeakersWrapper(
   int32_t num_speakers = SherpaOnnxOfflineTtsNumSpeakers(tts);
 
   return Napi::Number::New(env, num_speakers);
+}
+
+static Napi::Object OfflineTtsGenerateFromPhonemesWithConfigWrapper(
+    const Napi::CallbackInfo &info) {
+  Napi::Env env = info.Env();
+  if (info.Length() != 2 || !info[0].IsExternal() || !info[1].IsObject()) {
+    Napi::TypeError::New(env, "Expect (External<OfflineTts>, Object)")
+        .ThrowAsJavaScriptException();
+    return {};
+  }
+
+  const SherpaOnnxOfflineTts *tts =
+      info[0].As<Napi::External<SherpaOnnxOfflineTts>>().Data();
+  Napi::Object obj = info[1].As<Napi::Object>();
+  if (!obj.Has("phonemes") || !obj.Get("phonemes").IsString() ||
+      !obj.Has("spans") || !obj.Get("spans").IsArray()) {
+    Napi::TypeError::New(env, "Expected phonemes and spans[].phonemes")
+        .ThrowAsJavaScriptException();
+    return {};
+  }
+
+  std::string aggregate = obj.Get("phonemes").As<Napi::String>().Utf8Value();
+  Napi::Array spans_array = obj.Get("spans").As<Napi::Array>();
+  std::vector<std::string> span_strings;
+  span_strings.reserve(spans_array.Length());
+  for (uint32_t i = 0; i < spans_array.Length(); ++i) {
+    Napi::Value value = spans_array.Get(i);
+    if (!value.IsObject()) {
+      Napi::TypeError::New(env, "Each span must be an object")
+          .ThrowAsJavaScriptException();
+      return {};
+    }
+    Napi::Object span = value.As<Napi::Object>();
+    if (!span.Has("phonemes") || !span.Get("phonemes").IsString()) {
+      Napi::TypeError::New(env, "Each span needs phonemes")
+          .ThrowAsJavaScriptException();
+      return {};
+    }
+    span_strings.push_back(span.Get("phonemes").As<Napi::String>().Utf8Value());
+  }
+
+  std::vector<SherpaOnnxPhonemeSpan> spans;
+  spans.reserve(span_strings.size());
+  for (const auto &s : span_strings) spans.push_back({s.c_str()});
+  SherpaOnnxPhonemeInput input{aggregate.c_str(), spans.data(),
+                               static_cast<int32_t>(spans.size())};
+
+  Napi::Object config_obj =
+      obj.Has("generationConfig") && obj.Get("generationConfig").IsObject()
+          ? obj.Get("generationConfig").As<Napi::Object>()
+          : Napi::Object::New(env);
+  SherpaOnnxGenerationConfig config = GetGenerationConfig(config_obj);
+  const SherpaOnnxGeneratedAudio *audio =
+      SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+          tts, &input, &config, nullptr, nullptr);
+  SHERPA_ONNX_DELETE_GENERATION_C_STR(config);
+  if (!audio) {
+    Napi::Error::New(env, "Kokoro generation failed")
+        .ThrowAsJavaScriptException();
+    return {};
+  }
+
+  Napi::Object result = Napi::Object::New(env);
+  Napi::Array alignments = Napi::Array::New(env, audio->num_span_alignments);
+  for (int32_t i = 0; i < audio->num_span_alignments; ++i) {
+    const auto &source = audio->span_alignments[i];
+    Napi::Object row = Napi::Object::New(env);
+    row.Set("originalPhonemes", source.original_phonemes);
+    row.Set("inferredPhonemes", source.inferred_phonemes);
+    row.Set("startTs", source.start_ts);
+    row.Set("endTs", source.end_ts);
+    alignments.Set(i, row);
+  }
+  if (audio->has_span_alignments) {
+    result.Set("spanAlignments", alignments);
+  } else {
+    result.Set("spanAlignments", env.Null());
+  }
+  result.Set("sampleRate", audio->sample_rate);
+
+  bool external = !obj.Has("enableExternalBuffer") ||
+                  !obj.Get("enableExternalBuffer").IsBoolean() ||
+                  obj.Get("enableExternalBuffer").As<Napi::Boolean>().Value();
+  if (external) {
+    Napi::ArrayBuffer buffer = Napi::ArrayBuffer::New(
+        env, const_cast<float *>(audio->samples), sizeof(float) * audio->n,
+        [](Napi::Env, void *, const SherpaOnnxGeneratedAudio *hint) {
+          SherpaOnnxDestroyOfflineTtsGeneratedAudio(hint);
+        },
+        audio);
+    result.Set("samples", Napi::Float32Array::New(env, audio->n, buffer, 0));
+  } else {
+    Napi::ArrayBuffer buffer =
+        Napi::ArrayBuffer::New(env, sizeof(float) * audio->n);
+    auto samples = Napi::Float32Array::New(env, audio->n, buffer, 0);
+    std::copy(audio->samples, audio->samples + audio->n, samples.Data());
+    result.Set("samples", samples);
+    SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
+  }
+  return result;
 }
 
 // synchronous version
@@ -1341,6 +1435,11 @@ void InitNonStreamingTts(Napi::Env env, Napi::Object exports) {
 
   exports.Set(Napi::String::New(env, "offlineTtsGenerateWithConfig"),
               Napi::Function::New(env, OfflineTtsGenerateWithConfigWrapper));
+
+  exports.Set(
+      Napi::String::New(env, "offlineTtsGenerateFromPhonemesWithConfig"),
+      Napi::Function::New(env,
+                          OfflineTtsGenerateFromPhonemesWithConfigWrapper));
 
   exports.Set(Napi::String::New(env, "offlineTtsGenerateAsync"),
               Napi::Function::New(env, OfflineTtsGenerateAsyncWrapper));

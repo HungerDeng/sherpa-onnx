@@ -44,10 +44,17 @@ export const getOfflineTtsSampleRate: (handle: object) => number;
 export type TtsOutput = {
   samples: Float32Array;
   sampleRate: number;
+  spanAlignments?: Array<{
+    originalPhonemes: string;
+    inferredPhonemes: string;
+    startTs: number;
+    endTs: number;
+  }> | null;
 };
 
 export const offlineTtsGenerate: (handle: object, input: object) => TtsOutput;
 export const offlineTtsGenerateWithConfig: (handle: object, input: object) => TtsOutput;
+export const offlineTtsGenerateFromPhonemesWithConfig: (handle: object, input: object) => TtsOutput;
 export const offlineTtsGenerateAsync: (handle: object, input: object) => Promise<TtsOutput>;
 export const offlineTtsGenerateAsyncWithConfig: (handle: object, input: object) => Promise<TtsOutput>;
 

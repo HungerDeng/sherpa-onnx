@@ -424,8 +424,28 @@
  * @typedef {Object} GeneratedAudio
  * @property {Float32Array} samples - The generated/denoised audio samples.
  * @property {number} sampleRate - Sample rate in Hz.
+ * @property {SpanAlignment[] | null} [spanAlignments] - Kokoro span timings.
  * @see src/non-streaming-tts.cc
  * @see src/non-streaming-speech-denoiser.cc
+ */
+
+/**
+ * @typedef {Object} PhonemeSpan
+ * @property {string} phonemes
+ */
+
+/**
+ * @typedef {Object} PhonemeInput
+ * @property {string} phonemes - Aggregate phonemes sent to the model.
+ * @property {PhonemeSpan[]} spans - Caller-supplied alignment segments.
+ */
+
+/**
+ * @typedef {Object} SpanAlignment
+ * @property {string} originalPhonemes
+ * @property {string} inferredPhonemes
+ * @property {number} startTs
+ * @property {number} endTs
  */
 
 /**
@@ -547,10 +567,7 @@
  * @property {string} [model]
  * @property {string} [voices]
  * @property {string} [tokens]
- * @property {string} [dataDir]
  * @property {number} [lengthScale]
- * @property {string} [lexicon]
- * @property {string} [lang]
  */
 
 /**

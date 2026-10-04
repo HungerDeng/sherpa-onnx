@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -ex
 
-if [ ! -f ./kokoro-multi-lang-v1_0/model.onnx ]; then
-  curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
-  tar xf kokoro-multi-lang-v1_0.tar.bz2
-  rm kokoro-multi-lang-v1_0.tar.bz2
+if [ ! -f ../scripts/kokoro/v1.1-zh/kokoro.onnx ]; then
+  echo 'Export Kokoro v1.1-zh with pred_dur using scripts/kokoro/v1.1-zh/run.sh.' >&2
+  exit 1
 fi
 
 cargo run --example kokoro_tts_zh_en

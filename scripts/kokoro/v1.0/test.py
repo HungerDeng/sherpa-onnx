@@ -1,208 +1,121 @@
 #!/usr/bin/env python3
 # Copyright    2025  Xiaomi Corp.        (authors: Fangjun Kuang)
+"""Exercise the Kokoro SDK with phonemes and spans returned by misaki-rs."""
 
+import json
+import math
+from pathlib import Path
 
-import re
-import time
-from typing import Dict, List
-
-import jieba
 import numpy as np
-import onnxruntime as ort
-import soundfile as sf
+import sherpa_onnx
 
-try:
-    from piper_phonemize import phonemize_espeak
-except Exception as ex:
-    raise RuntimeError(
-        f"{ex}\nPlease run\n"
-        "pip install piper_phonemize -f https://k2-fsa.github.io/icefall/piper_phonemize.html"
+
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def load_fixture(name):
+    output = json.loads((FIXTURE_DIR / f"misaki-{name}.json").read_text())
+    return name, output["phonemes"], tuple(
+        span["phonemes"] for span in output["spans"]
     )
 
 
-def show(filename):
-    session_opts = ort.SessionOptions()
-    session_opts.log_severity_level = 3
-    sess = ort.InferenceSession(filename, session_opts)
-    for i in sess.get_inputs():
-        print(i)
-
-    print("-----")
-
-    for i in sess.get_outputs():
-        print(i)
+FIXTURES = (load_fixture("price"), load_fixture("ai"))
 
 
-"""
-NodeArg(name='tokens', type='tensor(int64)', shape=[1, 'sequence_length'])
-NodeArg(name='style', type='tensor(float)', shape=[1, 256])
-NodeArg(name='speed', type='tensor(float)', shape=[1])
------
-NodeArg(name='audio', type='tensor(float)', shape=['audio_length'])
-"""
-
-
-def load_voices(speaker_names: List[str], dim: List[int], voices_bin: str):
-    embedding = (
-        np.fromfile(voices_bin, dtype="uint8")
-        .view(np.float32)
-        .reshape(len(speaker_names), *dim)
+def make_input(phonemes, span_phonemes):
+    return sherpa_onnx.PhonemeInput(
+        phonemes=phonemes,
+        spans=[sherpa_onnx.PhonemeSpan(phonemes=p) for p in span_phonemes],
     )
-    print("embedding.shape", embedding.shape)
-    ans = dict()
-    for i in range(len(speaker_names)):
-        ans[speaker_names[i]] = embedding[i]
-
-    return ans
 
 
-def load_tokens(filename: str) -> Dict[str, int]:
-    ans = dict()
-    with open(filename, encoding="utf-8") as f:
-        for line in f:
-            fields = line.strip().split()
-            if len(fields) == 2:
-                token, idx = fields
-                ans[token] = int(idx)
-            else:
-                assert len(fields) == 1, (len(fields), line)
-                ans[" "] = int(fields[0])
-    return ans
+def check_audio(tts, name, phonemes, span_phonemes, sid):
+    audio = tts.generate_from_phonemes(
+        make_input(phonemes, span_phonemes), sid=sid, speed=1.0
+    )
+    assert audio.sample_rate == 24000, (name, audio.sample_rate)
+    assert len(audio.samples) > 0, name
+    assert np.isfinite(audio.samples).all(), name
 
-
-def load_lexicon(filename: str) -> Dict[str, List[str]]:
-    ans = dict()
-    for lexicon in filename.split(","):
-        print(lexicon)
-        with open(lexicon, encoding="utf-8") as f:
-            for line in f:
-                w, tokens = line.strip().split(" ", maxsplit=1)
-                ans[w] = "".join(tokens.split())
-    return ans
-
-
-class OnnxModel:
-    def __init__(self, model_filename: str, tokens: str, lexicon: str, voices_bin: str):
-        session_opts = ort.SessionOptions()
-        session_opts.inter_op_num_threads = 1
-        session_opts.intra_op_num_threads = 1
-
-        self.session_opts = session_opts
-        self.model = ort.InferenceSession(
-            model_filename,
-            sess_options=self.session_opts,
-            providers=["CPUExecutionProvider"],
+    alignments = audio.span_alignments
+    assert alignments is not None, name
+    assert len(alignments) == len(span_phonemes), (
+        name,
+        len(alignments),
+        len(span_phonemes),
+    )
+    duration = len(audio.samples) / audio.sample_rate
+    previous_end = 0.0
+    for index, (alignment, supplied) in enumerate(zip(alignments, span_phonemes)):
+        assert alignment.original_phonemes == supplied, (name, index, alignment)
+        assert alignment.inferred_phonemes == supplied, (name, index, alignment)
+        assert math.isfinite(alignment.start_ts), (name, index, alignment)
+        assert math.isfinite(alignment.end_ts), (name, index, alignment)
+        assert previous_end <= alignment.start_ts <= alignment.end_ts, (
+            name,
+            index,
+            alignment,
         )
-        self.token2id = load_tokens(tokens)
-        self.word2tokens = load_lexicon(lexicon)
-
-        meta = self.model.get_modelmeta().custom_metadata_map
-        print(meta)
-        dim = list(map(int, meta["style_dim"].split(",")))
-        speaker_names = meta["speaker_names"].split(",")
-        self.voices = load_voices(
-            speaker_names=speaker_names, dim=dim, voices_bin=voices_bin
+        assert alignment.end_ts <= duration + 1 / audio.sample_rate, (
+            name,
+            index,
+            alignment,
+            duration,
         )
-        self.sample_rate = int(meta["sample_rate"])
-        print(list(self.voices.keys()))
+        previous_end = alignment.end_ts
 
-        self.sample_rate = 24000
-        self.max_len = self.voices[next(iter(self.voices))].shape[0] - 1
+    print(f"{name}: {duration:.2f}s, {len(alignments)} aligned spans")
+    return audio
 
-    def __call__(self, text: str, voice: str):
-        punctuations = ';:,.!?-…()"“”'
-        text = text.lower()
 
-        tokens = ""
-
-        for t in re.findall("[\u4E00-\u9FFF]+|[\u0000-\u007f]+", text):
-            if ord(t[0]) < 0x7F:
-                for w in t.split():
-                    while w:
-                        if w[0] in punctuations:
-                            tokens += w[0] + " "
-                            w = w[1:]
-                            continue
-
-                        if w[-1] in punctuations:
-                            if w[:-1] in self.word2tokens:
-                                tokens += self.word2tokens[w[:-1]]
-                                tokens += w[-1]
-                        else:
-                            if w in self.word2tokens:
-                                tokens += self.word2tokens[w]
-                            else:
-                                print(f"Use espeak-ng for word {w}")
-                                tokens += "".join(phonemize_espeak(w, "en-us")[0])
-
-                        tokens += " "
-                        break
-            else:
-                # Chinese
-                for w in jieba.cut(t):
-                    if w in self.word2tokens:
-                        tokens += self.word2tokens[w]
-                    else:
-                        for i in w:
-                            if i in self.word2tokens:
-                                tokens += self.word2tokens[i]
-                            else:
-                                print(f"skip {i}")
-
-        token_ids = [self.token2id[i] for i in tokens]
-        token_ids = token_ids[: self.max_len]
-
-        style = self.voices[voice][len(token_ids)]
-
-        token_ids = [0, *token_ids, 0]
-        token_ids = np.array([token_ids], dtype=np.int64)
-
-        speed = np.array([1.0], dtype=np.float32)
-
-        audio = self.model.run(
-            [
-                self.model.get_outputs()[0].name,
-            ],
-            {
-                self.model.get_inputs()[0].name: token_ids,
-                self.model.get_inputs()[1].name: style,
-                self.model.get_inputs()[2].name: speed,
-            },
-        )[0]
-        return audio
+def make_tts(model):
+    config = sherpa_onnx.OfflineTtsConfig(
+        model=sherpa_onnx.OfflineTtsModelConfig(
+            kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                model=str(model), voices="./voices.bin", tokens="./tokens.txt"
+            ),
+            num_threads=2,
+        )
+    )
+    assert config.validate(), model
+    return sherpa_onnx.OfflineTts(config)
 
 
 def main():
-    m = OnnxModel(
-        model_filename="./kokoro.onnx",
-        tokens="./tokens.txt",
-        lexicon="./lexicon-gb-en.txt,./lexicon-zh.txt",
-        voices_bin="./voices.bin",
-    )
-    text = "来听一听, 这个是什么口音? How are you doing? Are you ok? Thank you! 你觉得中英文说得如何呢?"
+    # v1.0's bf_alice is speaker 20. The fourth span is the multiword price,
+    # and punctuation has its own spans in both misaki-rs fixtures.
+    sid = 20
+    assert len(FIXTURES[0][2]) == 9
+    assert len(FIXTURES[1][2]) == 11
+    assert " " in FIXTURES[0][2][3]
+    assert FIXTURES[0][2][4] == "."
 
-    text = text.lower()
+    for model in (Path("kokoro.onnx"), Path("kokoro.int8.onnx")):
+        assert model.is_file(), model
+        tts = make_tts(model)
+        for name, phonemes, spans in FIXTURES:
+            check_audio(tts, f"{model}:{name}", phonemes, spans, sid)
 
-    voice = "bf_alice"
-    start = time.time()
-    audio = m(text, voice=voice)
-    end = time.time()
+        if model.name == "kokoro.onnx":
+            # 510 style rows allow at most 509 payload tokens per inference.
+            phonemes = " ".join([FIXTURES[0][1]] * 8)
+            spans = FIXTURES[0][2] * 8
+            assert len(phonemes) > 509
+            check_audio(tts, f"{model}:rebatching", phonemes, spans, sid)
 
-    elapsed_seconds = end - start
-    audio_duration = len(audio) / m.sample_rate
-    real_time_factor = elapsed_seconds / audio_duration
-
-    filename = f"kokoro_v1.0_{voice}_zh_en.wav"
-    sf.write(
-        filename,
-        audio,
-        samplerate=m.sample_rate,
-        subtype="PCM_16",
-    )
-    print(f" Saved to {filename}")
-    print(f" Elapsed seconds: {elapsed_seconds:.3f}")
-    print(f" Audio duration in seconds: {audio_duration:.3f}")
-    print(f" RTF: {elapsed_seconds:.3f}/{audio_duration:.3f} = {real_time_factor:.3f}")
+            # An unsupported phoneme keeps its caller-supplied alignment row.
+            supplied = FIXTURES[0][1] + " 🧪"
+            supplied_spans = FIXTURES[0][2] + ("🧪",)
+            audio = tts.generate_from_phonemes(
+                make_input(supplied, supplied_spans), sid=sid, speed=1.0
+            )
+            assert len(audio.samples) > 0
+            assert len(audio.span_alignments) == len(supplied_spans)
+            omitted = audio.span_alignments[-1]
+            assert omitted.original_phonemes == "🧪"
+            assert omitted.inferred_phonemes == ""
+            assert omitted.start_ts == omitted.end_ts == -1.0
 
 
 if __name__ == "__main__":

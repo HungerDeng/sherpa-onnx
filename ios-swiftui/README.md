@@ -1,5 +1,22 @@
 # iOS SwiftUI Examples
 
+## Kokoro TTS example
+
+In `SherpaOnnxTts/SherpaOnnxTts/ViewModel.swift`, set
+`selectedTtsExampleModel` to `.kokoroV1`. Add a v1.0 `model.onnx` exported
+with `audio` and `pred_dur` outputs, `voices.bin`, and `tokens.txt` to the
+app's Copy Bundle Resources phase.
+
+The Kokoro text box accepts the full JSON response from misaki-rs. The app
+reads `phonemes` and each `spans[].phonemes`, then passes them to the Swift
+SDK. Other fields in the JSON are ignored. The generated audio keeps its
+samples and sample rate, and the app displays the returned per-span phonemes
+and timestamps.
+
+The checked-in Xcode project pins the released `sherpa-onnx` 1.13.8 package.
+To build this Kokoro path, use a package and iOS xcframework built with the
+new phoneme API and `pred_dur` support.
+
 ## Overview
 
 The sherpa-onnx Swift package provides two products for iOS:

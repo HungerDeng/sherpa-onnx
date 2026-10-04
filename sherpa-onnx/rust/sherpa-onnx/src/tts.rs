@@ -57,7 +57,7 @@
 use crate::utils::to_c_ptr;
 use sherpa_onnx_sys as sys;
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::ptr;
 use std::slice;
@@ -159,11 +159,7 @@ pub struct OfflineTtsKokoroModelConfig {
     pub model: Option<String>,
     pub voices: Option<String>,
     pub tokens: Option<String>,
-    pub data_dir: Option<String>,
     pub length_scale: f32,
-    pub dict_dir: Option<String>,
-    pub lexicon: Option<String>,
-    pub lang: Option<String>,
 }
 
 impl Default for OfflineTtsKokoroModelConfig {
@@ -172,11 +168,7 @@ impl Default for OfflineTtsKokoroModelConfig {
             model: None,
             voices: None,
             tokens: None,
-            data_dir: None,
             length_scale: 1.0,
-            dict_dir: None,
-            lexicon: None,
-            lang: None,
         }
     }
 }
@@ -187,11 +179,7 @@ impl OfflineTtsKokoroModelConfig {
             model: to_c_ptr(&self.model, cstrings),
             voices: to_c_ptr(&self.voices, cstrings),
             tokens: to_c_ptr(&self.tokens, cstrings),
-            data_dir: to_c_ptr(&self.data_dir, cstrings),
             length_scale: self.length_scale,
-            dict_dir: to_c_ptr(&self.dict_dir, cstrings),
-            lexicon: to_c_ptr(&self.lexicon, cstrings),
-            lang: to_c_ptr(&self.lang, cstrings),
         }
     }
 }
@@ -439,6 +427,25 @@ impl Default for GenerationConfig {
 
 // --- Generated audio ---
 
+#[derive(Clone, Debug)]
+pub struct PhonemeSpan {
+    pub phonemes: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PhonemeInput {
+    pub phonemes: String,
+    pub spans: Vec<PhonemeSpan>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpanAlignment {
+    pub original_phonemes: String,
+    pub inferred_phonemes: String,
+    pub start_ts: f32,
+    pub end_ts: f32,
+}
+
 /// Generated audio returned by [`OfflineTts::generate_with_config`].
 pub struct GeneratedAudio {
     ptr: *const sys::SherpaOnnxGeneratedAudio,
@@ -463,6 +470,40 @@ impl GeneratedAudio {
     /// Return the output sample rate in Hz.
     pub fn sample_rate(&self) -> i32 {
         unsafe { (*self.ptr).sample_rate }
+    }
+
+    /// Returns one alignment per caller-supplied span for Kokoro, or `None`
+    /// for other TTS models.
+    pub fn span_alignments(&self) -> Option<Vec<SpanAlignment>> {
+        let audio = unsafe { &*self.ptr };
+        if audio.has_span_alignments == 0 {
+            return None;
+        }
+        if audio
+            .span_alignments
+            .is_null()
+            || audio.num_span_alignments <= 0
+        {
+            return Some(Vec::new());
+        }
+        let values = unsafe {
+            slice::from_raw_parts(audio.span_alignments, audio.num_span_alignments as usize)
+        };
+        Some(
+            values
+                .iter()
+                .map(|value| SpanAlignment {
+                    original_phonemes: unsafe { CStr::from_ptr(value.original_phonemes) }
+                        .to_string_lossy()
+                        .into_owned(),
+                    inferred_phonemes: unsafe { CStr::from_ptr(value.inferred_phonemes) }
+                        .to_string_lossy()
+                        .into_owned(),
+                    start_ts: value.start_ts,
+                    end_ts: value.end_ts,
+                })
+                .collect(),
+        )
     }
 
     /// Save generated audio to a WAV file.
@@ -526,6 +567,103 @@ unsafe impl Send for OfflineTts {}
 unsafe impl Sync for OfflineTts {}
 
 impl OfflineTts {
+    /// Generate Kokoro audio from a precomputed phoneme string and span list.
+    pub fn generate_from_phonemes_with_config<F>(
+        &self,
+        input: &PhonemeInput,
+        config: &GenerationConfig,
+        callback: Option<F>,
+    ) -> Option<GeneratedAudio>
+    where
+        F: FnMut(&[f32], f32) -> bool + 'static,
+    {
+        let phonemes = CString::new(
+            input
+                .phonemes
+                .as_str(),
+        )
+        .ok()?;
+        let span_strings: Vec<CString> = input
+            .spans
+            .iter()
+            .map(|s| {
+                CString::new(
+                    s.phonemes
+                        .as_str(),
+                )
+            })
+            .collect::<Result<_, _>>()
+            .ok()?;
+        let spans: Vec<sys::SherpaOnnxPhonemeSpan> = span_strings
+            .iter()
+            .map(|s| sys::SherpaOnnxPhonemeSpan {
+                phonemes: s.as_ptr(),
+            })
+            .collect();
+        let sys_input = sys::SherpaOnnxPhonemeInput {
+            phonemes: phonemes.as_ptr(),
+            spans: spans.as_ptr(),
+            num_spans: spans.len() as i32,
+        };
+
+        let ref_text = CString::new(
+            config
+                .reference_text
+                .as_deref()
+                .unwrap_or(""),
+        )
+        .ok()?;
+        let extra = CString::new(match &config.extra {
+            Some(map) => serde_json::to_string(map).ok()?,
+            None => "{}".to_string(),
+        })
+        .ok()?;
+        let (ref_audio, ref_len) = match &config.reference_audio {
+            Some(samples) => (samples.as_ptr(), samples.len() as i32),
+            None => (ptr::null(), 0),
+        };
+        let sys_config = sys::SherpaOnnxGenerationConfig {
+            silence_scale: config.silence_scale,
+            speed: config.speed,
+            sid: config.sid,
+            reference_audio: ref_audio,
+            reference_audio_len: ref_len,
+            reference_sample_rate: config.reference_sample_rate,
+            reference_text: ref_text.as_ptr(),
+            num_steps: config.num_steps,
+            extra: extra.as_ptr(),
+        };
+        let (c_callback, c_arg): (
+            sys::SherpaOnnxGeneratedAudioProgressCallbackWithArg,
+            *mut c_void,
+        ) = if let Some(cb) = callback {
+            let boxed: Box<BoxedProgressCallback> = Box::new(Box::new(cb));
+            let raw = Box::into_raw(boxed);
+            (Some(progress_callback_trampoline), raw as *mut c_void)
+        } else {
+            (None, ptr::null_mut())
+        };
+        let audio_ptr = unsafe {
+            sys::SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+                self.ptr,
+                &sys_input,
+                &sys_config,
+                c_callback,
+                c_arg,
+            )
+        };
+        if !c_arg.is_null() {
+            unsafe {
+                drop(Box::from_raw(c_arg as *mut BoxedProgressCallback));
+            }
+        }
+        if audio_ptr.is_null() {
+            None
+        } else {
+            Some(GeneratedAudio { ptr: audio_ptr })
+        }
+    }
+
     /// Create a TTS engine from `config`.
     pub fn create(config: &OfflineTtsConfig) -> Option<Self> {
         let mut cstrings = Vec::new();

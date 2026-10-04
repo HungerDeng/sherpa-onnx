@@ -133,12 +133,22 @@ struct Index {
       console.log(`received msg from worker: ${msgType}`);
 
       if (msgType == 'init-tts-done') {
-        this.info = 'Model initialized!\nPlease enter text and press start.';
+        this.info = e.data['requiresPhonemes'] as boolean
+          ? 'Model initialized. Enter misaki-rs G2pOutput JSON and press start.'
+          : 'Model initialized!\nPlease enter text and press start.';
         this.sampleRate = e.data['sampleRate'] as number;
         this.numSpeakers = e.data['numSpeakers'] as number;
         this.numThreads = e.data['numThreads'] as number;
 
         this.initTtsDone = true;
+      }
+
+      if (msgType == 'tts-generate-error') {
+        this.isGenerating = false;
+        this.ttsGeneratedDone = true;
+        this.btnStartEnabled = true;
+        this.btnStopEnabled = false;
+        this.info = e.data['message'] as string;
       }
 
       if (msgType == 'tts-generate-partial') {

@@ -190,14 +190,6 @@ static OfflineTtsConfig GetOfflineTtsConfig(JNIEnv *env, jobject config,
   SHERPA_ONNX_JNI_READ_STRING(ans.model.kokoro.tokens, tokens, kokoro_cls,
                               kokoro);
 
-  SHERPA_ONNX_JNI_READ_STRING(ans.model.kokoro.lexicon, lexicon, kokoro_cls,
-                              kokoro);
-
-  SHERPA_ONNX_JNI_READ_STRING(ans.model.kokoro.lang, lang, kokoro_cls, kokoro);
-
-  SHERPA_ONNX_JNI_READ_STRING(ans.model.kokoro.data_dir, dataDir, kokoro_cls,
-                              kokoro);
-
   SHERPA_ONNX_JNI_READ_FLOAT(ans.model.kokoro.length_scale, lengthScale,
                              kokoro_cls, kokoro);
 
@@ -358,11 +350,34 @@ static OfflineTtsConfig GetOfflineTtsConfig(JNIEnv *env, jobject config,
 }  // namespace sherpa_onnx
 
 // Convert audio samples and sample rate to a Java GeneratedAudio object
-static jobject CreateAudioObject(JNIEnv *env, const std::vector<float> &samples,
-                                 int32_t sample_rate) {
+static jobject CreateAudioObject(JNIEnv *env,
+                                 const sherpa_onnx::GeneratedAudio &audio) {
   // Step 1: Create a jfloatArray for samples
-  jfloatArray samples_arr = env->NewFloatArray(samples.size());
-  env->SetFloatArrayRegion(samples_arr, 0, samples.size(), samples.data());
+  jfloatArray samples_arr = env->NewFloatArray(audio.samples.size());
+  env->SetFloatArrayRegion(samples_arr, 0, audio.samples.size(),
+                           audio.samples.data());
+
+  jobjectArray alignments = nullptr;
+  if (audio.span_alignments) {
+    jclass alignment_cls =
+        env->FindClass("com/k2fsa/sherpa/onnx/SpanAlignment");
+    jmethodID alignment_ctor = env->GetMethodID(
+        alignment_cls, "<init>", "(Ljava/lang/String;Ljava/lang/String;FF)V");
+    alignments = env->NewObjectArray(audio.span_alignments->size(),
+                                      alignment_cls, nullptr);
+    for (size_t i = 0; i < audio.span_alignments->size(); ++i) {
+      const auto &a = (*audio.span_alignments)[i];
+      jstring original = env->NewStringUTF(a.original_phonemes.c_str());
+      jstring inferred = env->NewStringUTF(a.inferred_phonemes.c_str());
+      jobject value = env->NewObject(alignment_cls, alignment_ctor, original,
+                                      inferred, a.start_ts, a.end_ts);
+      env->SetObjectArrayElement(alignments, i, value);
+      env->DeleteLocalRef(original);
+      env->DeleteLocalRef(inferred);
+      env->DeleteLocalRef(value);
+    }
+    env->DeleteLocalRef(alignment_cls);
+  }
 
   // Step 2: Find the GeneratedAudio class
   jclass gen_audio_cls = env->FindClass("com/k2fsa/sherpa/onnx/GeneratedAudio");
@@ -371,9 +386,9 @@ static jobject CreateAudioObject(JNIEnv *env, const std::vector<float> &samples,
     return nullptr;
   }
 
-  // Step 3: Get the constructor: GeneratedAudio(float[] samples, int
-  // sampleRate)
-  jmethodID ctor = env->GetMethodID(gen_audio_cls, "<init>", "([FI)V");
+  jmethodID ctor = env->GetMethodID(
+      gen_audio_cls, "<init>",
+      "([FI[Lcom/k2fsa/sherpa/onnx/SpanAlignment;)V");
   if (!ctor) {
     env->DeleteLocalRef(samples_arr);
     env->DeleteLocalRef(gen_audio_cls);
@@ -382,10 +397,12 @@ static jobject CreateAudioObject(JNIEnv *env, const std::vector<float> &samples,
 
   // Step 4: Create the object
   jobject gen_audio_obj =
-      env->NewObject(gen_audio_cls, ctor, samples_arr, sample_rate);
+      env->NewObject(gen_audio_cls, ctor, samples_arr, audio.sample_rate,
+                     alignments);
 
   // Step 5: Clean up local refs
   env->DeleteLocalRef(samples_arr);
+  if (alignments) env->DeleteLocalRef(alignments);
   env->DeleteLocalRef(gen_audio_cls);
 
   return gen_audio_obj;
@@ -524,7 +541,7 @@ JNIEXPORT jobject JNICALL Java_com_k2fsa_sherpa_onnx_OfflineTts_generateImpl(
 
   env->ReleaseStringUTFChars(text, p_text);
 
-  return CreateAudioObject(env, audio.samples, audio.sample_rate);
+  return CreateAudioObject(env, audio);
 }
 
 SHERPA_ONNX_EXTERN_C
@@ -559,7 +576,7 @@ Java_com_k2fsa_sherpa_onnx_OfflineTts_generateWithCallbackImpl(
 
   env->ReleaseStringUTFChars(text, p_text);
 
-  return CreateAudioObject(env, audio.samples, audio.sample_rate);
+  return CreateAudioObject(env, audio);
 }
 
 SHERPA_ONNX_EXTERN_C
@@ -590,7 +607,72 @@ Java_com_k2fsa_sherpa_onnx_OfflineTts_generateWithConfigImpl(
 
   env->ReleaseStringUTFChars(text, p_text);
 
-  return CreateAudioObject(env, audio.samples, audio.sample_rate);
+  return CreateAudioObject(env, audio);
+}
+
+SHERPA_ONNX_EXTERN_C
+JNIEXPORT jobject JNICALL
+Java_com_k2fsa_sherpa_onnx_OfflineTts_generateFromPhonemesImpl(
+    JNIEnv *env, jobject /*obj*/, jlong ptr, jobject input_obj,
+    jobject generation_config, jobject callback) {
+  return SafeJNI(
+      env, "OfflineTts_generateFromPhonemesImpl",
+      [&]() -> jobject {
+        if (!input_obj || !ptr) return nullptr;
+        sherpa_onnx::PhonemeInput input;
+        jclass input_cls = env->GetObjectClass(input_obj);
+        jfieldID phonemes_field = env->GetFieldID(
+            input_cls, "phonemes", "Ljava/lang/String;");
+        jfieldID spans_field = env->GetFieldID(
+            input_cls, "spans", "[Lcom/k2fsa/sherpa/onnx/PhonemeSpan;");
+        jstring phonemes = static_cast<jstring>(
+            env->GetObjectField(input_obj, phonemes_field));
+        jobjectArray spans = static_cast<jobjectArray>(
+            env->GetObjectField(input_obj, spans_field));
+        if (!phonemes || !spans) return nullptr;
+        const char *p = env->GetStringUTFChars(phonemes, nullptr);
+        input.phonemes = p;
+        env->ReleaseStringUTFChars(phonemes, p);
+        jsize n = env->GetArrayLength(spans);
+        input.spans.reserve(n);
+        for (jsize i = 0; i < n; ++i) {
+          jobject span = env->GetObjectArrayElement(spans, i);
+          if (!span) return nullptr;
+          jclass span_cls = env->GetObjectClass(span);
+          jfieldID field = env->GetFieldID(
+              span_cls, "phonemes", "Ljava/lang/String;");
+          jstring value = static_cast<jstring>(
+              env->GetObjectField(span, field));
+          if (!value) return nullptr;
+          const char *value_chars = env->GetStringUTFChars(value, nullptr);
+          input.spans.emplace_back(value_chars);
+          env->ReleaseStringUTFChars(value, value_chars);
+          env->DeleteLocalRef(value);
+          env->DeleteLocalRef(span_cls);
+          env->DeleteLocalRef(span);
+        }
+        env->DeleteLocalRef(spans);
+        env->DeleteLocalRef(phonemes);
+        env->DeleteLocalRef(input_cls);
+
+        auto config = sherpa_onnx::GetGenerationConfig(env,
+                                                         generation_config);
+        auto *tts = reinterpret_cast<sherpa_onnx::OfflineTts *>(ptr);
+        std::function<int32_t(const float *, int32_t, float)> wrapper;
+        if (callback) {
+          wrapper = [env, callback](const float *samples, int32_t count,
+                                    float) -> int32_t {
+            jfloatArray array = env->NewFloatArray(count);
+            env->SetFloatArrayRegion(array, 0, count, samples);
+            int32_t ret = CallCallback(env, callback, array);
+            env->DeleteLocalRef(array);
+            return ret;
+          };
+        }
+        auto audio = tts->GenerateFromPhonemes(input, config, wrapper);
+        return CreateAudioObject(env, audio);
+      },
+      static_cast<jobject>(nullptr));
 }
 
 SHERPA_ONNX_EXTERN_C

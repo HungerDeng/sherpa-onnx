@@ -63,6 +63,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -76,6 +77,23 @@ import './web_audio.dart' if (dart.library.io) './web_audio_stub.dart'
     as web_audio;
 import './worker_web.dart' if (dart.library.io) './worker_stub.dart'
     as worker_lib;
+
+sherpa_onnx.PhonemeInput _parsePhonemeInput(String g2pOutputJson) {
+  final value = jsonDecode(g2pOutputJson);
+  if (value is! Map<String, dynamic> ||
+      value['phonemes'] is! String || value['spans'] is! List) {
+    throw const FormatException(
+        'Kokoro requires G2pOutput JSON with phonemes and spans[].phonemes');
+  }
+  final spans = (value['spans'] as List).map((entry) {
+    if (entry is! Map<String, dynamic> || entry['phonemes'] is! String) {
+      throw const FormatException('Each span needs phonemes');
+    }
+    return sherpa_onnx.PhonemeSpan(phonemes: entry['phonemes'] as String);
+  }).toList();
+  return sherpa_onnx.PhonemeInput(
+      phonemes: value['phonemes'] as String, spans: spans);
+}
 
 /// State of the TTS engine.
 enum TtsState { uninitialized, initializing, initialized }
@@ -113,8 +131,9 @@ class _GenerateDone extends _FromWorker {
   final double duration;
   final double elapsed;
   final int generationId;
+  final List<sherpa_onnx.SpanAlignment>? spanAlignments;
   _GenerateDone(this.samples, this.sampleRate, this.duration, this.elapsed,
-      this.generationId);
+      this.generationId, this.spanAlignments);
 }
 
 class _AudioChunk extends _FromWorker {
@@ -215,11 +234,16 @@ class TtsManager {
     final id = _nextId++;
 
     if (kIsWeb) {
-      _worker?.generate(
-        text: text, sid: sid, speed: speed, generationId: generationId,
-        referenceAudio: referenceAudio, referenceSampleRate: referenceSampleRate,
-        numSteps: numSteps,
-      );
+      try {
+        _worker?.generate(
+          text: text, sid: sid, speed: speed, generationId: generationId,
+          referenceAudio: referenceAudio, referenceSampleRate: referenceSampleRate,
+          numSteps: numSteps,
+        );
+      } catch (e) {
+        _logController.add('Error: $e');
+        return -1;
+      }
     } else {
       _pending[id] = _PendingGenerate(
         text: text, sid: sid, speed: speed, generationId: generationId,
@@ -424,10 +448,7 @@ class TtsManager {
 
       final sampleRate = tts.sampleRate;
       final genId = req.generationId;
-      final audio = tts.generateWithConfig(
-        text: req.text,
-        config: genConfig,
-        onProgress: (samples, progress) {
+      int onProgress(Float32List samples, double progress) {
           if (cancelled) return 0; // stop generation
           mainSendPort.send(_AudioChunk(
             Float32List.fromList(samples),
@@ -436,8 +457,19 @@ class TtsManager {
             genId,
           ));
           return 1; // continue generation
-        },
-      );
+      }
+
+      final audio = tts.config.model.kokoro.model.isNotEmpty
+          ? tts.generateFromPhonemes(
+              input: _parsePhonemeInput(req.text),
+              config: genConfig,
+              onProgress: onProgress,
+            )
+          : tts.generateWithConfig(
+              text: req.text,
+              config: genConfig,
+              onProgress: onProgress,
+            );
 
       stopwatch.stop();
       final elapsed = stopwatch.elapsedMilliseconds / 1000.0;
@@ -449,6 +481,7 @@ class TtsManager {
         duration,
         elapsed,
         genId,
+        audio.spanAlignments,
       ));
     } catch (e) {
       mainSendPort.send(_WorkerError('$e'));
@@ -481,6 +514,7 @@ class TtsManager {
         elapsed: msg.elapsed,
         sampleRate: msg.sampleRate,
         generationId: msg.generationId,
+        spanAlignments: msg.spanAlignments,
       ));
     }
   }

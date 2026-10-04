@@ -10,9 +10,7 @@
 Usage
 
 
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-tar xf kokoro-en-v0_19.tar.bz2
-rm kokoro-en-v0_19.tar.bz2
+Use a Kokoro v1.0 model exported with the pred_dur output.
 
 ./kokoro-tts-en-c-api
 
@@ -36,10 +34,9 @@ static int32_t ProgressCallback(const float *samples, int32_t num_samples,
 int32_t main(int32_t argc, char *argv[]) {
   SherpaOnnxOfflineTtsConfig config;
   memset(&config, 0, sizeof(config));
-  config.model.kokoro.model = "./kokoro-en-v0_19/model.onnx";
-  config.model.kokoro.voices = "./kokoro-en-v0_19/voices.bin";
-  config.model.kokoro.tokens = "./kokoro-en-v0_19/tokens.txt";
-  config.model.kokoro.data_dir = "./kokoro-en-v0_19/espeak-ng-data";
+  config.model.kokoro.model = "./kokoro-multi-lang-v1_0/model.onnx";
+  config.model.kokoro.voices = "./kokoro-multi-lang-v1_0/voices.bin";
+  config.model.kokoro.tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
 
   config.model.num_threads = 2;
 
@@ -47,12 +44,15 @@ int32_t main(int32_t argc, char *argv[]) {
   config.model.debug = 1;
 
   const char *filename = "./generated-kokoro-en.wav";
-  const char *text =
-      "Today as always, men fall into two groups: slaves and free men. Whoever "
-      "does not have two-thirds of his day for himself, is a slave, whatever "
-      "he may be: a statesman, a businessman, an official, or a scholar. "
-      "Friends fell out often because life was changing so fast. The easiest "
-      "thing in the world was to lose touch with someone.";
+  // These phonemes and spans are the phonemes/spans subset of a misaki-rs
+  // G2pOutput. Only aggregate phonemes produce audio; spans label alignments.
+  const SherpaOnnxPhonemeSpan spans[] = {
+      {"ðə"}, {"pɹˈaɪs"}, {"ɪz"},
+      {"wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz"}, {"."},
+      {"ɐ"}, {"bˈɪt"}, {"ɛkspˈɛnsɪv"}, {"."}};
+  const SherpaOnnxPhonemeInput input = {
+      "ðə pɹˈaɪs ɪz wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz. ɐ bˈɪt ɛkspˈɛnsɪv.",
+      spans, sizeof(spans) / sizeof(spans[0])};
 
   const SherpaOnnxOfflineTts *tts = SherpaOnnxCreateOfflineTts(&config);
   // mapping of sid to voice name
@@ -68,19 +68,32 @@ int32_t main(int32_t argc, char *argv[]) {
 #if 0
   // If you don't want to use a callback, then please enable this branch
   const SherpaOnnxGeneratedAudio *audio =
-      SherpaOnnxOfflineTtsGenerateWithConfig(tts, text, &cfg, NULL, NULL);
+      SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(tts, &input, &cfg,
+                                                         NULL, NULL);
 #else
   const SherpaOnnxGeneratedAudio *audio =
-      SherpaOnnxOfflineTtsGenerateWithConfig(tts, text, &cfg, ProgressCallback,
-                                             NULL);
+      SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+          tts, &input, &cfg, ProgressCallback, NULL);
 #endif
+
+  if (!audio) {
+    fprintf(stderr, "Kokoro generation failed\n");
+    SherpaOnnxDestroyOfflineTts(tts);
+    return 1;
+  }
+
+  for (int32_t i = 0; i < audio->num_span_alignments; ++i) {
+    const SherpaOnnxSpanAlignment *a = &audio->span_alignments[i];
+    fprintf(stderr, "%s -> %s: %.3f to %.3f s\n", a->original_phonemes,
+            a->inferred_phonemes, a->start_ts, a->end_ts);
+  }
 
   SherpaOnnxWriteWave(audio->samples, audio->n, audio->sample_rate, filename);
 
   SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
   SherpaOnnxDestroyOfflineTts(tts);
 
-  fprintf(stderr, "Input text is: %s\n", text);
+  fprintf(stderr, "Input phonemes: %s\n", input.phonemes);
   fprintf(stderr, "Speaker ID is: %d\n", sid);
   fprintf(stderr, "Saved to: %s\n", filename);
 

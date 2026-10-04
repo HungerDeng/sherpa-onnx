@@ -38,9 +38,6 @@ Future<sherpa_onnx.OfflineTtsConfig> prepareModelConfig() async {
         model: _abs(d, m.kokoro.model),
         voices: _abs(d, m.kokoro.voices),
         tokens: _abs(d, m.kokoro.tokens),
-        dataDir: _abs(d, m.kokoro.dataDir),
-        lexicon: _absMulti(d, m.kokoro.lexicon),
-        lang: m.kokoro.lang,
         lengthScale: m.kokoro.lengthScale,
       ),
       kitten: sherpa_onnx.OfflineTtsKittenModelConfig(

@@ -11,7 +11,6 @@
 namespace sherpa_onnx {
 
 // please refer to
-// https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/kokoro/v0.19/add_meta_data.py
 // https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/kokoro/v1.0/add_meta_data.py
 // https://github.com/k2-fsa/sherpa-onnx/blob/master/scripts/kokoro/v1.1-zh/add_meta_data.py
 struct OfflineTtsKokoroModelMetaData {

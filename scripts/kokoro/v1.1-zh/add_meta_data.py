@@ -23,7 +23,7 @@ def main():
     meta_data = {
         "model_type": "kokoro",
         "language": "multi-lang, e.g., English, Chinese",
-        "has_espeak": 1,
+        "has_espeak": 0,
         "sample_rate": 24000,
         "version": 2,
         "voice": "en-us",
@@ -34,7 +34,7 @@ def main():
         "speaker_names": ",".join(map(str, speaker2id.keys())),
         "model_url": "https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh",
         "maintainer": "k2-fsa",
-        "comment": "This is Kokoro v1.1-zh, a multilingual TTS model, supporting English, Chinese.",
+        "comment": "Kokoro v1.1-zh accepts precomputed phonemes and exports audio and per-token durations.",
     }
 
     print(model.metadata_props)

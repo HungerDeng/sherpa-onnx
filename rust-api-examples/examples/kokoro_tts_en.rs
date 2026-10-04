@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Xiaomi Corporation
 //
 // This file demonstrates how to use Kokoro TTS with sherpa-onnx's Rust API
-// for offline English text-to-speech.
+// for offline phoneme-to-speech using precomputed misaki-rs output.
 
 use sherpa_onnx::{
-    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
+    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig, PhonemeInput,
+    PhonemeSpan,
 };
 use std::time::Instant;
 
@@ -12,10 +13,9 @@ fn main() {
     let config = OfflineTtsConfig {
         model: sherpa_onnx::OfflineTtsModelConfig {
             kokoro: OfflineTtsKokoroModelConfig {
-                model: Some("./kokoro-en-v0_19/model.onnx".into()),
-                voices: Some("./kokoro-en-v0_19/voices.bin".into()),
-                tokens: Some("./kokoro-en-v0_19/tokens.txt".into()),
-                data_dir: Some("./kokoro-en-v0_19/espeak-ng-data".into()),
+                model: Some("../scripts/kokoro/v1.0/kokoro.onnx".into()),
+                voices: Some("../scripts/kokoro/v1.0/voices.bin".into()),
+                tokens: Some("../scripts/kokoro/v1.0/tokens.txt".into()),
                 length_scale: 1.0,
                 ..Default::default()
             },
@@ -31,11 +31,28 @@ fn main() {
     println!("Sample rate: {}", tts.sample_rate());
     println!("Num speakers: {}", tts.num_speakers());
 
-    let text = "Today as always, men fall into two groups: slaves and free men. Whoever \
-        does not have two-thirds of his day for himself, is a slave, whatever \
-        he may be: a statesman, a businessman, an official, or a scholar. \
-        Friends fell out often because life was changing so fast. The easiest \
-        thing in the world was to lose touch with someone.";
+    // Forward only G2pOutput.phonemes and G2pOutput.spans[*].phonemes.
+    let input = PhonemeInput {
+        phonemes: "ˌeɪˈaɪ ɪz sˌoʊ ˈɔːsʌm. aɪ kˈænt lˈɪv wɪðˈaʊt ɪt.".into(),
+        spans: [
+            "ˌeɪˈaɪ",
+            "ɪz",
+            "sˌoʊ",
+            "ˈɔːsʌm",
+            ".",
+            "aɪ",
+            "kˈænt",
+            "lˈɪv",
+            "wɪðˈaʊt",
+            "ɪt",
+            ".",
+        ]
+        .into_iter()
+        .map(|phonemes| PhonemeSpan {
+            phonemes: phonemes.into(),
+        })
+        .collect(),
+    };
 
     let gen_config = GenerationConfig {
         sid: 0,
@@ -46,8 +63,8 @@ fn main() {
     let start = Instant::now();
 
     let audio = tts
-        .generate_with_config(
-            text,
+        .generate_from_phonemes_with_config(
+            &input,
             &gen_config,
             Some(|_samples: &[f32], progress: f32| -> bool {
                 println!("Progress: {:.1}%", progress * 100.0);
@@ -55,6 +72,16 @@ fn main() {
             }),
         )
         .expect("Generation failed");
+
+    for alignment in audio.span_alignments().expect("Kokoro span alignments") {
+        println!(
+            "{} -> {}: {:.3}s to {:.3}s",
+            alignment.original_phonemes,
+            alignment.inferred_phonemes,
+            alignment.start_ts,
+            alignment.end_ts
+        );
+    }
 
     let elapsed_seconds = start.elapsed().as_secs_f32();
     let duration = audio.samples().len() as f32 / audio.sample_rate() as f32;

@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:web/web.dart' as web;
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
 import './generated_audio.dart';
 import './model_web.dart' as m;
@@ -26,6 +27,7 @@ class TtsWorker {
   final OnErrorCallback onError;
 
   String _pendingLabel = '';
+  bool _isKokoro = false;
 
   TtsWorker({
     required this.onChunk,
@@ -38,6 +40,7 @@ class TtsWorker {
   Future<void> init() async {
     final modelFiles = await m.loadModelFileBytes();
     final config = await m.prepareModelConfig();
+    _isKokoro = config.model.kokoro.model.isNotEmpty;
 
     if (kDebugMode) {
       print('[worker_web] config: ${config.toString()}');
@@ -104,6 +107,26 @@ class TtsWorker {
     msg['speed'] = speed.toJS;
     msg['generationId'] = generationId.toJS;
     msg['numSteps'] = numSteps.toJS;
+
+    if (_isKokoro) {
+      final value = jsonDecode(text);
+      if (value is! Map<String, dynamic> ||
+          value['phonemes'] is! String || value['spans'] is! List) {
+        throw const FormatException(
+            'Kokoro requires G2pOutput JSON with phonemes and spans[].phonemes');
+      }
+      final input = JSObject();
+      input['phonemes'] = (value['phonemes'] as String).toJS;
+      input['spans'] = (value['spans'] as List).map((entry) {
+        if (entry is! Map<String, dynamic> || entry['phonemes'] is! String) {
+          throw const FormatException('Each span needs phonemes');
+        }
+        final span = JSObject();
+        span['phonemes'] = (entry['phonemes'] as String).toJS;
+        return span;
+      }).toList().toJS;
+      msg['phonemeInput'] = input;
+    }
 
     if (referenceAudio != null && referenceAudio.isNotEmpty) {
       msg['referenceAudio'] = referenceAudio.buffer.toJS;
@@ -180,6 +203,24 @@ class TtsWorker {
           (data.getProperty('elapsed'.toJS)! as JSNumber).toDartDouble;
       final genId =
           (data.getProperty('generationId'.toJS) as JSNumber?)?.toDartInt ?? 0;
+      final alignmentValue = data.getProperty('spanAlignments'.toJS);
+      List<sherpa_onnx.SpanAlignment>? alignments;
+      if (alignmentValue != null) {
+        final array = alignmentValue as JSArray;
+        final length = (array.getProperty('length'.toJS) as JSNumber).toDartInt;
+        alignments = [];
+        for (var i = 0; i < length; ++i) {
+          final row = array.getProperty(i.toJS) as JSObject;
+          alignments.add(sherpa_onnx.SpanAlignment(
+            originalPhonemes:
+                (row.getProperty('originalPhonemes'.toJS) as JSString).toDart,
+            inferredPhonemes:
+                (row.getProperty('inferredPhonemes'.toJS) as JSString).toDart,
+            startTs: (row.getProperty('startTs'.toJS) as JSNumber).toDartDouble,
+            endTs: (row.getProperty('endTs'.toJS) as JSNumber).toDartDouble,
+          ));
+        }
+      }
 
       final wavBytes =
           web_audio.encodeWav(Float32List.fromList(samples), sampleRate);
@@ -190,6 +231,7 @@ class TtsWorker {
         duration: duration,
         elapsed: elapsed,
         sampleRate: sampleRate,
+        spanAlignments: alignments,
       ));
       _pendingLabel = '';
     } else if (type == 'log') {

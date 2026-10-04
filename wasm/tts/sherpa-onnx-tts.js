@@ -162,21 +162,14 @@ function initSherpaOnnxOfflineTtsMatchaModelConfig(config, Module) {
 }
 
 function initSherpaOnnxOfflineTtsKokoroModelConfig(config, Module) {
-  const modelLen = Module.lengthBytesUTF8(config.model) + 1;
-  const voicesLen = Module.lengthBytesUTF8(config.voices) + 1;
+  const modelLen = Module.lengthBytesUTF8(config.model || '') + 1;
+  const voicesLen = Module.lengthBytesUTF8(config.voices || '') + 1;
   const tokensLen = Module.lengthBytesUTF8(config.tokens || '') + 1;
-  const dataDirLen = Module.lengthBytesUTF8(config.dataDir || '') + 1;
-  const dictDir = '';
-  const dictDirLen = Module.lengthBytesUTF8(dictDir) + 1;
-  const lexiconLen = Module.lengthBytesUTF8(config.lexicon || '') + 1;
-  const langLen = Module.lengthBytesUTF8(config.lang || '') + 1;
-
-  const n = modelLen + voicesLen + tokensLen + dataDirLen + dictDirLen +
-      lexiconLen + langLen;
+  const n = modelLen + voicesLen + tokensLen;
 
   const buffer = Module._malloc(n);
 
-  const len = 8 * 4;
+  const len = 4 * 4;
   const ptr = Module._malloc(len);
 
   let offset = 0;
@@ -189,18 +182,6 @@ function initSherpaOnnxOfflineTtsKokoroModelConfig(config, Module) {
   Module.stringToUTF8(config.tokens || '', buffer + offset, tokensLen);
   offset += tokensLen;
 
-  Module.stringToUTF8(config.dataDir || '', buffer + offset, dataDirLen);
-  offset += dataDirLen;
-
-  Module.stringToUTF8(dictDir, buffer + offset, dictDirLen);
-  offset += dictDirLen;
-
-  Module.stringToUTF8(config.lexicon || '', buffer + offset, lexiconLen);
-  offset += lexiconLen;
-
-  Module.stringToUTF8(config.lang || '', buffer + offset, langLen);
-  offset += langLen;
-
   offset = 0;
   Module.setValue(ptr, buffer + offset, 'i8*');
   offset += modelLen;
@@ -211,19 +192,7 @@ function initSherpaOnnxOfflineTtsKokoroModelConfig(config, Module) {
   Module.setValue(ptr + 8, buffer + offset, 'i8*');
   offset += tokensLen;
 
-  Module.setValue(ptr + 12, buffer + offset, 'i8*');
-  offset += dataDirLen;
-
-  Module.setValue(ptr + 16, config.lengthScale || 1.0, 'float');
-
-  Module.setValue(ptr + 20, buffer + offset, 'i8*');
-  offset += dictDirLen;
-
-  Module.setValue(ptr + 24, buffer + offset, 'i8*');
-  offset += lexiconLen;
-
-  Module.setValue(ptr + 28, buffer + offset, 'i8*');
-  offset += langLen;
+  Module.setValue(ptr + 12, config.lengthScale || 1.0, 'float');
 
   return {
     buffer: buffer,
@@ -553,9 +522,6 @@ function initSherpaOnnxOfflineTtsModelConfig(config, Module) {
       voices: '',
       tokens: '',
       lengthScale: 1.0,
-      dataDir: '',
-      lexicon: '',
-      lang: '',
     };
   }
 
@@ -881,19 +847,7 @@ class OfflineTts {
       throw new Error('TTS generation failed');
     }
 
-    const base = h / 4;
-
-    const samplesPtr = this.Module.HEAPU32[base];
-    const numSamples = this.Module.HEAP32[base + 1];
-    const sampleRate = this.Module.HEAP32[base + 2];
-
-    const heapSamples = this.Module.HEAPF32.subarray(
-        samplesPtr / 4, samplesPtr / 4 + numSamples);
-
-    const samples = new Float32Array(heapSamples);
-
-    this.Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(h);
-    return {samples: samples, sampleRate: sampleRate};
+    return this.readGeneratedAudio(h);
   }
 
   generateWithConfig(text, genConfig) {
@@ -933,19 +887,94 @@ class OfflineTts {
       throw new Error('Failed to generate audio');
     }
 
-    const base = audioPtr / 4;
+    return this.readGeneratedAudio(audioPtr);
+  }
 
-    const samplesPtr = this.Module.HEAPU32[base];     // float* samples
-    const numSamples = this.Module.HEAP32[base + 1];  // int32 num_samples
-    const sampleRate = this.Module.HEAP32[base + 2];  // int32 sample_rate
+  readGeneratedAudio(audioPtr) {
+    try {
+      const base = audioPtr / 4;
+      const samplesPtr = this.Module.HEAPU32[base];
+      const numSamples = this.Module.HEAP32[base + 1];
+      const sampleRate = this.Module.HEAP32[base + 2];
+      const hasSpanAlignments = this.Module.HEAP32[base + 3] !== 0;
+      const alignmentsPtr = this.Module.HEAPU32[base + 4];
+      const numAlignments = this.Module.HEAP32[base + 5];
 
-    const heapSamples = this.Module.HEAPF32.subarray(
-        samplesPtr / 4, samplesPtr / 4 + numSamples);
-    const samples = new Float32Array(heapSamples);
+      const samples = new Float32Array(this.Module.HEAPF32.subarray(
+          samplesPtr / 4, samplesPtr / 4 + numSamples));
+      let spanAlignments = null;
+      if (hasSpanAlignments) {
+        spanAlignments = [];
+        for (let i = 0; i < numAlignments; ++i) {
+          const row = alignmentsPtr / 4 + i * 4;
+          spanAlignments.push({
+            originalPhonemes: this.Module.UTF8ToString(this.Module.HEAPU32[row]),
+            inferredPhonemes: this.Module.UTF8ToString(this.Module.HEAPU32[row + 1]),
+            startTs: this.Module.HEAPF32[row + 2],
+            endTs: this.Module.HEAPF32[row + 3],
+          });
+        }
+      }
+      return {samples, sampleRate, spanAlignments};
+    } finally {
+      this.Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
+    }
+  }
 
-    this.Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
+  // input is the phonemes/spans subset of a misaki-rs G2pOutput.
+  generateFromPhonemes(input, genConfig = {}) {
+    if (!this.handle) throw new Error('OfflineTts has been freed');
+    if (!input || typeof input.phonemes !== 'string' ||
+        !Array.isArray(input.spans) ||
+        input.spans.some(span => !span || typeof span.phonemes !== 'string')) {
+      throw new Error('input must contain phonemes and spans[].phonemes');
+    }
 
-    return {samples, sampleRate};
+    const allocated = [];
+    const allocUtf8 = value => {
+      const len = this.Module.lengthBytesUTF8(value) + 1;
+      const ptr = this.Module._malloc(len);
+      allocated.push(ptr);
+      this.Module.stringToUTF8(value, ptr, len);
+      return ptr;
+    };
+
+    let callbackPtr = 0;
+    let cfgWasm = null;
+    let audioPtr = 0;
+    try {
+      const aggregatePtr = allocUtf8(input.phonemes);
+      const spansPtr = input.spans.length ?
+          this.Module._malloc(input.spans.length * 4) : 0;
+      if (spansPtr) allocated.push(spansPtr);
+      input.spans.forEach((span, i) => {
+        this.Module.HEAPU32[spansPtr / 4 + i] = allocUtf8(span.phonemes);
+      });
+      const inputPtr = this.Module._malloc(12);
+      allocated.push(inputPtr);
+      this.Module.setValue(inputPtr, aggregatePtr, 'i8*');
+      this.Module.setValue(inputPtr + 4, spansPtr, 'i8*');
+      this.Module.setValue(inputPtr + 8, input.spans.length, 'i32');
+
+      cfgWasm = initSherpaOnnxGenerationConfig(genConfig, this.Module);
+      if (genConfig.callback) {
+        callbackPtr = this.Module.addFunction((samplesPtr, n, progress, arg) => {
+          const heapSamples = this.Module.HEAPF32.subarray(
+              samplesPtr / 4, samplesPtr / 4 + n);
+          return genConfig.callback(new Float32Array(heapSamples), n,
+                                    progress, arg);
+        }, 'iiifi');
+      }
+      audioPtr = this.Module._SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+          this.handle, inputPtr, cfgWasm.ptr, callbackPtr, 0);
+    } finally {
+      if (callbackPtr) this.Module.removeFunction(callbackPtr);
+      if (cfgWasm) freeSherpaOnnxGenerationConfig(cfgWasm, this.Module);
+      for (const ptr of allocated) this.Module._free(ptr);
+    }
+
+    if (!audioPtr) throw new Error('Failed to generate audio from phonemes');
+    return this.readGeneratedAudio(audioPtr);
   }
 
   save(filename, audio) {
@@ -995,10 +1024,7 @@ function createOfflineTts(Module, myConfig) {
     model: '',
     voices: '',
     tokens: '',
-    dataDir: '',
     lengthScale: 1.0,
-    lexicon: '',
-    lang: '',
   };
 
   const offlineTtsKittenModelConfig = {
@@ -1103,9 +1129,6 @@ function createOfflineTts(Module, myConfig) {
       offlineTtsKokoroModelConfig.model = './model.onnx';
       offlineTtsKokoroModelConfig.voices = './voices.bin';
       offlineTtsKokoroModelConfig.tokens = './tokens.txt';
-      offlineTtsKokoroModelConfig.dataDir = './espeak-ng-data';
-      offlineTtsKokoroModelConfig.lexicon = './lexicon-us-en.txt,./lexicon-zh.txt';
-      ruleFsts = './phone-zh.fst,./date-zh.fst,./number-zh.fst';
       break;
   }
 

@@ -126,20 +126,13 @@ self.onmessage = async function(e) {
       }
 
       // 5. Create TTS instance using sherpa-onnx-tts.js helper.
-      const config = initSherpaOnnxOfflineTtsConfig(msg.config, Module);
-      const handle = Module._SherpaOnnxCreateOfflineTts(config.ptr);
-      freeConfig(config, Module);
-
-      if (!handle) {
+      tts = createOfflineTts(Module, msg.config);
+      if (!tts || !tts.handle) {
         self.postMessage({ type: 'error', message: 'Failed to create TTS (null handle)' });
         return;
       }
-
-      const sampleRate = Module._SherpaOnnxOfflineTtsSampleRate(handle);
-      const numSpeakers = Module._SherpaOnnxOfflineTtsNumSpeakers(handle);
-
-      tts = { handle, sampleRate, numSpeakers };
-      self.postMessage({ type: 'ready', numSpeakers, sampleRate });
+      self.postMessage({ type: 'ready', numSpeakers: tts.numSpeakers,
+        sampleRate: tts.sampleRate });
     } catch (e) {
       self.postMessage({ type: 'error', message: e.message || String(e) });
     }
@@ -162,14 +155,12 @@ self.onmessage = async function(e) {
         genCfg.numSteps = msg.numSteps || 5;
       }
 
-      const cfgWasm = initSherpaOnnxGenerationConfig(genCfg, Module);
-
       // Set up callback for streaming chunks.
       _cancelled = false;
       const genId = msg.generationId || 0;
-      const callbackPtr = Module.addFunction((samplesPtr, n, progress, arg) => {
+      genCfg.callback = (samples, n, progress, arg) => {
         if (_cancelled) return 0;
-        const samples = new Float32Array(Module.HEAPF32.buffer, samplesPtr, n).slice();
+        samples = new Float32Array(samples);
         self.postMessage({
           type: 'chunk',
           samples: samples.buffer,
@@ -178,38 +169,16 @@ self.onmessage = async function(e) {
           generationId: genId,
         }, [samples.buffer]);
         return 1;
-      }, 'iiifi');
+      };
 
-      // Prepare text.
-      const textLen = Module.lengthBytesUTF8(msg.text) + 1;
-      const textPtr = Module._malloc(textLen);
-      Module.stringToUTF8(msg.text, textPtr, textLen);
-
-      // Generate.
-      const audioPtr = Module._SherpaOnnxOfflineTtsGenerateWithConfig(
-        tts.handle, textPtr, cfgWasm.ptr, callbackPtr, 0);
-
-      Module._free(textPtr);
-      freeSherpaOnnxGenerationConfig(cfgWasm, Module);
-      Module.removeFunction(callbackPtr);
-
-      if (!audioPtr) {
-        self.postMessage({ type: 'error', message: 'Generation failed' });
-        return;
-      }
-
-      // Read result.
-      const base = audioPtr / 4;
-      const samplesPtr = Module.HEAPU32[base];
-      const numSamples = Module.HEAP32[base + 1];
-      const sampleRateOut = Module.HEAP32[base + 2];
-
-      const samples = new Float32Array(Module.HEAPF32.buffer, samplesPtr, numSamples).slice();
-
-      Module._SherpaOnnxDestroyOfflineTtsGeneratedAudio(audioPtr);
+      const output = msg.phonemeInput
+          ? tts.generateFromPhonemes(msg.phonemeInput, genCfg)
+          : tts.generateWithConfig(msg.text, genCfg);
+      const samples = output.samples;
+      const sampleRateOut = output.sampleRate;
 
       const elapsed = (performance.now() - startTime) / 1000;
-      const duration = numSamples / sampleRateOut;
+      const duration = samples.length / sampleRateOut;
 
       self.postMessage({
         type: 'done',
@@ -218,6 +187,7 @@ self.onmessage = async function(e) {
         duration: duration,
         elapsed: elapsed,
         generationId: genId,
+        spanAlignments: output.spanAlignments,
       }, [samples.buffer]);
     } catch (e) {
       self.postMessage({ type: 'error', message: e.message || String(e) });
@@ -230,7 +200,7 @@ self.onmessage = async function(e) {
 
   else if (msg.type === 'dispose') {
     if (tts) {
-      Module._SherpaOnnxDestroyOfflineTts(tts.handle);
+      tts.free();
       tts = null;
     }
     self.close();

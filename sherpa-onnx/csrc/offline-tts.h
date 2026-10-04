@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "sherpa-onnx/csrc/offline-tts-model-config.h"
@@ -54,9 +56,35 @@ struct OfflineTtsConfig {
   std::string ToString() const;
 };
 
+struct PhonemeSpan {
+  std::string phonemes;
+
+  PhonemeSpan() = default;
+  explicit PhonemeSpan(std::string phonemes)
+      : phonemes(std::move(phonemes)) {}
+};
+
+struct PhonemeInput {
+  std::string phonemes;
+  std::vector<PhonemeSpan> spans;
+
+  PhonemeInput() = default;
+  PhonemeInput(std::string phonemes, std::vector<PhonemeSpan> spans)
+      : phonemes(std::move(phonemes)), spans(std::move(spans)) {}
+};
+
+struct SpanAlignment {
+  std::string original_phonemes;
+  std::string inferred_phonemes;
+  float start_ts = -1.0f;
+  float end_ts = -1.0f;
+};
+
 struct GeneratedAudio {
   std::vector<float> samples;
-  int32_t sample_rate;
+  int32_t sample_rate = 0;
+  // Set by Kokoro, with one entry for each caller-supplied span.
+  std::optional<std::vector<SpanAlignment>> span_alignments;
 
   // Silence means pause here.
   // If scale > 1, then it increases the duration of a pause
@@ -147,6 +175,10 @@ class OfflineTts {
   GeneratedAudio Generate(const std::string &text,
                           const GenerationConfig &config,
                           GeneratedAudioCallback callback = nullptr) const;
+
+  GeneratedAudio GenerateFromPhonemes(
+      const PhonemeInput &input, const GenerationConfig &config,
+      GeneratedAudioCallback callback = nullptr) const;
 
   // Return the sample rate of the generated audio
   int32_t SampleRate() const;

@@ -17,6 +17,15 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
+private struct MisakiG2pOutput: Decodable {
+    let phonemes: String
+    let spans: [MisakiSpan]
+}
+
+private struct MisakiSpan: Decodable {
+    let phonemes: String
+}
+
 class TtsProgressHandler: ObservableObject {
     @Published var progress: Float = 0.0
     @Published var isGenerating = false
@@ -165,6 +174,9 @@ struct ContentView: View {
     @State private var speed = 1.0
     @State private var text = ""
     @State private var showAlert = false
+    @State private var alertMessage = ""
+    @State private var audioInfo: String?
+    @State private var spanAlignments: [SherpaOnnxSpanAlignmentSwift]?
     @State var filename: URL = NSURL() as URL
     @State var audioPlayer: AVAudioPlayer!
 
@@ -236,7 +248,10 @@ struct ContentView: View {
                 .padding(.vertical, 4)
             }
 
-            Text("Please input your text below").padding([.trailing, .top, .bottom])
+            Text(selectedTtsExampleModel == .kokoroV1
+                 ? "Paste the misaki-rs G2pOutput JSON below"
+                 : "Please input your text below")
+                .padding([.trailing, .top, .bottom])
 
             TextEditor(text: $text)
                 .font(.body)
@@ -244,6 +259,24 @@ struct ContentView: View {
                 .disableAutocorrection(true)
                 .border(Color.black)
                 .frame(minHeight: 100)
+
+            if let audioInfo = audioInfo {
+                Text(audioInfo).font(.caption).foregroundColor(.secondary)
+            }
+            if let alignments = spanAlignments {
+                Text("Span alignments").font(.headline)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(alignments.indices, id: \.self) { index in
+                            let row = alignments[index]
+                            Text("\(row.originalPhonemes) → \(row.inferredPhonemes) (\(row.startTs, specifier: "%.2f")–\(row.endTs, specifier: "%.2f") s)")
+                                .font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(maxHeight: 150)
+            }
 
             Spacer()
             HStack {
@@ -259,12 +292,6 @@ struct ContentView: View {
                         generate()
                     }) {
                         Text("Generate")
-                    }
-                    .alert(isPresented: $showAlert) {
-                        Alert(
-                            title: Text("Empty text"),
-                            message: Text(
-                                "Please input your text before clicking the Generate button"))
                     }
                 }
                 Spacer()
@@ -299,15 +326,44 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
+        .alert(isPresented: $showAlert) {
+            Alert(title: Text("Cannot generate audio"), message: Text(alertMessage))
+        }
     }
 
     private func generate() {
         let speakerId = Int(self.sid) ?? 0
         let t = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty {
+            self.alertMessage = selectedTtsExampleModel == .kokoroV1
+                ? "Paste a misaki-rs G2pOutput JSON object first."
+                : "Please input your text before clicking Generate."
             self.showAlert = true
             return
         }
+
+        let phonemeInput: MisakiG2pOutput?
+        if selectedTtsExampleModel == .kokoroV1 {
+            do {
+                let decoded = try JSONDecoder().decode(
+                    MisakiG2pOutput.self, from: Data(t.utf8))
+                guard !decoded.phonemes.isEmpty, !decoded.spans.isEmpty else {
+                    alertMessage = "G2pOutput needs phonemes and at least one span."
+                    showAlert = true
+                    return
+                }
+                phonemeInput = decoded
+            } catch {
+                alertMessage = "Invalid G2pOutput JSON: \(error.localizedDescription)"
+                showAlert = true
+                return
+            }
+        } else {
+            phonemeInput = nil
+        }
+
+        audioInfo = nil
+        spanAlignments = nil
 
         if self.filename.absoluteString.isEmpty {
             let tempDirectoryURL = NSURL.fileURL(
@@ -322,6 +378,7 @@ struct ContentView: View {
         let currentLang = self.lang
         let currentFilename = self.filename
         let isSupertonic = tts.isSupertonic
+        let isKokoro = selectedTtsExampleModel == .kokoroV1
 
         DispatchQueue.global(qos: .userInitiated).async {
             handler.startPlayback(sampleRate: sampleRate)
@@ -330,7 +387,7 @@ struct ContentView: View {
 
             let audio: SherpaOnnxGeneratedAudioWrapper
 
-            if isSupertonic {
+            if isKokoro || isSupertonic {
                 let progressCallback: TtsProgressCallbackWithArg = {
                     samples, n, progress, arg in
                     let h = Unmanaged<TtsProgressHandler>.fromOpaque(arg!)
@@ -342,11 +399,19 @@ struct ContentView: View {
                 var genConfig = SherpaOnnxGenerationConfigSwift()
                 genConfig.sid = speakerId
                 genConfig.speed = currentSpeed
-                genConfig.numSteps = currentNumSteps
-                genConfig.extra = ["lang": currentLang]
-                audio = tts.generateWithConfig(
-                    text: t, config: genConfig,
-                    callback: progressCallback, arg: arg)
+                if let phonemeInput = phonemeInput {
+                    audio = tts.generateFromPhonemes(
+                        phonemes: phonemeInput.phonemes,
+                        spans: phonemeInput.spans.map(\.phonemes),
+                        config: genConfig,
+                        callback: progressCallback, arg: arg)
+                } else {
+                    genConfig.numSteps = currentNumSteps
+                    genConfig.extra = ["lang": currentLang]
+                    audio = tts.generateWithConfig(
+                        text: t, config: genConfig,
+                        callback: progressCallback, arg: arg)
+                }
             } else {
                 let simpleCallback: TtsCallbackWithArg = { samples, n, arg in
                     let h = Unmanaged<TtsProgressHandler>.fromOpaque(arg!)
@@ -360,12 +425,22 @@ struct ContentView: View {
                     sid: speakerId, speed: currentSpeed)
             }
 
-            let _ = audio.save(filename: currentFilename.path)
+            let saved = audio.audio != nil && audio.save(filename: currentFilename.path) == 1
+            let generatedSampleRate = audio.audio != nil ? audio.sampleRate : 0
+            let generatedSampleCount = audio.audio != nil ? audio.n : 0
+            let generatedAlignments = audio.audio != nil ? audio.spanAlignments : nil
 
             handler.finishGeneration()
 
             DispatchQueue.main.async {
-                self.audioPlayer = try? AVAudioPlayer(contentsOf: self.filename)
+                if saved {
+                    self.audioInfo = "\(generatedSampleCount) samples at \(generatedSampleRate) Hz"
+                    self.spanAlignments = generatedAlignments
+                    self.audioPlayer = try? AVAudioPlayer(contentsOf: currentFilename)
+                } else {
+                    self.alertMessage = "Audio generation failed."
+                    self.showAlert = true
+                }
             }
         }
     }

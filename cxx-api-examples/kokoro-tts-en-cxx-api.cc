@@ -9,9 +9,7 @@
 /*
 Usage
 
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-tar xf kokoro-en-v0_19.tar.bz2
-rm kokoro-en-v0_19.tar.bz2
+Use a Kokoro v1.0 model exported with the pred_dur output.
 
 ./kokoro-tts-en-cxx-api
 
@@ -36,10 +34,9 @@ int32_t main(int32_t argc, char *argv[]) {
   using namespace sherpa_onnx::cxx;  // NOLINT
   OfflineTtsConfig config;
 
-  config.model.kokoro.model = "./kokoro-en-v0_19/model.onnx";
-  config.model.kokoro.voices = "./kokoro-en-v0_19/voices.bin";
-  config.model.kokoro.tokens = "./kokoro-en-v0_19/tokens.txt";
-  config.model.kokoro.data_dir = "./kokoro-en-v0_19/espeak-ng-data";
+  config.model.kokoro.model = "./kokoro-multi-lang-v1_0/model.onnx";
+  config.model.kokoro.voices = "./kokoro-multi-lang-v1_0/voices.bin";
+  config.model.kokoro.tokens = "./kokoro-multi-lang-v1_0/tokens.txt";
 
   config.model.num_threads = 2;
 
@@ -47,12 +44,11 @@ int32_t main(int32_t argc, char *argv[]) {
   config.model.debug = 1;
 
   std::string filename = "./generated-kokoro-en-cxx.wav";
-  std::string text =
-      "Today as always, men fall into two groups: slaves and free men. Whoever "
-      "does not have two-thirds of his day for himself, is a slave, whatever "
-      "he may be: a statesman, a businessman, an official, or a scholar. "
-      "Friends fell out often because life was changing so fast. The easiest "
-      "thing in the world was to lose touch with someone.";
+  PhonemeInput input{
+      "ðə pɹˈaɪs ɪz wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz. ɐ bˈɪt ɛkspˈɛnsɪv.",
+      {{"ðə"}, {"pɹˈaɪs"}, {"ɪz"},
+       {"wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz"}, {"."},
+       {"ɐ"}, {"bˈɪt"}, {"ɛkspˈɛnsɪv"}, {"."}}};
 
   auto tts = OfflineTts::Create(config);
   int32_t sid = 0;
@@ -64,14 +60,24 @@ int32_t main(int32_t argc, char *argv[]) {
 
 #if 0
   // If you don't want to use a callback, then please enable this branch
-  GeneratedAudio audio = tts.Generate(text, gen_config);
+  GeneratedAudio audio = tts.GenerateFromPhonemes(input, gen_config);
 #else
-  GeneratedAudio audio = tts.Generate(text, gen_config, ProgressCallback);
+  GeneratedAudio audio =
+      tts.GenerateFromPhonemes(input, gen_config, ProgressCallback);
 #endif
+
+  if (audio.samples.empty()) return 1;
+  if (audio.span_alignments) {
+    for (const auto &a : *audio.span_alignments) {
+      fprintf(stderr, "%s -> %s: %.3f to %.3f s\n",
+              a.original_phonemes.c_str(), a.inferred_phonemes.c_str(),
+              a.start_ts, a.end_ts);
+    }
+  }
 
   WriteWave(filename, {audio.samples, audio.sample_rate});
 
-  fprintf(stderr, "Input text is: %s\n", text.c_str());
+  fprintf(stderr, "Input phonemes: %s\n", input.phonemes.c_str());
   fprintf(stderr, "Speaker ID is: %d\n", sid);
   fprintf(stderr, "Saved to: %s\n", filename.c_str());
 

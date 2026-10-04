@@ -141,9 +141,18 @@ class _TtsScreenState extends State<TtsScreen> {
       _chunkBuffer.clear();
 
       final rtf = item.elapsed / item.duration;
-      final status = 'Duration: ${item.duration.toStringAsFixed(2)}s\n'
+      final alignments = item.spanAlignments;
+      final alignmentText = alignments == null
+          ? ''
+          : '\n' + alignments.map((span) =>
+              '${span.originalPhonemes} → ${span.inferredPhonemes}: '
+              '${span.startTs.toStringAsFixed(3)}–${span.endTs.toStringAsFixed(3)}s'
+            ).join('\n');
+      final status = 'Sample rate: ${item.sampleRate} Hz\n'
+          'Duration: ${item.duration.toStringAsFixed(2)}s\n'
           'Elapsed: ${item.elapsed.toStringAsFixed(2)}s\n'
-          'RTF: ${item.elapsed.toStringAsFixed(2)} / ${item.duration.toStringAsFixed(2)} = ${rtf.toStringAsFixed(3)}';
+          'RTF: ${item.elapsed.toStringAsFixed(2)} / ${item.duration.toStringAsFixed(2)} = ${rtf.toStringAsFixed(3)}'
+          '$alignmentText';
 
       setState(() {
         _isGenerating = false;
@@ -273,7 +282,8 @@ class _TtsScreenState extends State<TtsScreen> {
 
     final text = _textController.text.trim();
     if (text.isEmpty) {
-      setState(() => _logController.text = 'Please enter text to synthesize');
+      setState(() => _logController.text = selectedModelIndex == 4 || selectedModelIndex == 5
+          ? 'Please paste G2pOutput JSON' : 'Please enter text to synthesize');
       return;
     }
 
@@ -365,6 +375,8 @@ class _TtsScreenState extends State<TtsScreen> {
               speed: _speed,
               onSpeedChanged: (v) => setState(() => _speed = v),
               textController: _textController,
+              inputHint: selectedModelIndex == 4 || selectedModelIndex == 5
+                  ? 'Paste misaki-rs G2pOutput JSON' : 'Enter text to synthesize',
               sidController: _sidController,
               onGenerate: _onGenerate,
               onClear: () {

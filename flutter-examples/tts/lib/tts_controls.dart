@@ -8,6 +8,7 @@ class TtsControls extends StatelessWidget {
   final double speed;
   final ValueChanged<double> onSpeedChanged;
   final TextEditingController textController;
+  final String inputHint;
   final TextEditingController sidController;
   final VoidCallback onGenerate;
   final VoidCallback onClear;
@@ -29,6 +30,7 @@ class TtsControls extends StatelessWidget {
     required this.speed,
     required this.onSpeedChanged,
     required this.textController,
+    this.inputHint = 'Enter text to synthesize',
     required this.sidController,
     required this.onGenerate,
     required this.onClear,
@@ -117,11 +119,11 @@ class TtsControls extends StatelessWidget {
           onChanged: onSpeedChanged,
         ),
         TextField(
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             border: OutlineInputBorder(),
-            hintText: 'Enter text to synthesize',
+            hintText: inputHint,
             contentPadding:
-                EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           ),
           maxLines: 8,
           minLines: 4,

@@ -1,17 +1,13 @@
 // Copyright (c)  2025  Xiaomi Corporation
 const sherpa_onnx = require('sherpa-onnx-node');
+const {priceInput, loadInput, modelFiles, printAlignments} =
+    require('./kokoro-input');
 
-// please refer to
-// https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html
-// to download model files
 function createOfflineTts() {
   const config = {
     model: {
       kokoro: {
-        model: './kokoro-en-v0_19/model.onnx',
-        voices: './kokoro-en-v0_19/voices.bin',
-        tokens: './kokoro-en-v0_19/tokens.txt',
-        dataDir: './kokoro-en-v0_19/espeak-ng-data',
+        ...modelFiles('v1.0'),
       },
       debug: true,
       numThreads: 1,
@@ -24,19 +20,17 @@ function createOfflineTts() {
 
 const tts = createOfflineTts();
 
-const text =
-    'Today as always, men fall into two groups: slaves and free men. Whoever does not have two-thirds of his day for himself, is a slave, whatever he may be: a statesman, a businessman, an official, or a scholar.';
-
 const generationConfig = new sherpa_onnx.GenerationConfig({
-  sid: 6,
+  sid: 9,
   speed: 1.0,
   silenceScale: 0.2,
 });
 
 
-let start = Date.now();
-const audio = tts.generate({text, generationConfig});
-let stop = Date.now();
+const input = loadInput(priceInput);
+const start = Date.now();
+const audio = tts.generateFromPhonemes({...input, generationConfig});
+const stop = Date.now();
 const elapsed_seconds = (stop - start) / 1000;
 const duration = audio.samples.length / audio.sampleRate;
 const real_time_factor = elapsed_seconds / duration;
@@ -45,8 +39,9 @@ console.log('Elapsed', elapsed_seconds.toFixed(3), 'seconds');
 console.log(
     `RTF = ${elapsed_seconds.toFixed(3)}/${duration.toFixed(3)} =`,
     real_time_factor.toFixed(3));
+printAlignments(audio);
 
-const filename = 'test-kokoro-en-6.wav';
+const filename = 'test-kokoro-en-9.wav';
 sherpa_onnx.writeWave(
     filename, {samples: audio.samples, sampleRate: audio.sampleRate});
 

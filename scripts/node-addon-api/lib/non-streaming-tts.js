@@ -70,6 +70,10 @@ class OfflineTts {
       throw new TypeError('generate() expects an object');
     }
 
+    if (typeof obj.phonemes === 'string' && Array.isArray(obj.spans)) {
+      return this.generateFromPhonemes(obj);
+    }
+
     // If generationConfig is present, use new API
     if (obj.generationConfig !== undefined) {
       return addon.offlineTtsGenerateWithConfig(this.handle, obj);
@@ -77,6 +81,22 @@ class OfflineTts {
 
     // Fallback to legacy path
     return addon.offlineTtsGenerate(this.handle, obj);
+  }
+
+  /**
+   * Generate Kokoro speech from a Misaki G2pOutput subset. The aggregate
+   * phonemes generate audio; spans determine the alignment rows.
+   * @param {import('./types').PhonemeInput & {generationConfig?: GenerationConfig,
+   *   enableExternalBuffer?: boolean}} input
+   * @returns {GeneratedAudio}
+   */
+  generateFromPhonemes(input) {
+    if (!input || typeof input.phonemes !== 'string' ||
+        !Array.isArray(input.spans) ||
+        input.spans.some(span => !span || typeof span.phonemes !== 'string')) {
+      throw new TypeError('Expected phonemes and spans[].phonemes');
+    }
+    return addon.offlineTtsGenerateFromPhonemesWithConfig(this.handle, input);
   }
   /**
    * Generate audio asynchronously with optional generationConfig and progress

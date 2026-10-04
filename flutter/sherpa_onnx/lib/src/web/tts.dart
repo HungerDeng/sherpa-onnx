@@ -37,9 +37,9 @@ class OfflineTts {
 
   void free() {
     if (_freed) return;
-    final m = getModule();
-    final destroyFn = m.getProperty('_SherpaOnnxDestroyOfflineTts'.toJS) as JSFunction?;
-    destroyFn?.callAsFunction(null, ptr);
+    final handle = ptr as JSObject;
+    final freeFn = handle.getProperty('free'.toJS) as JSFunction?;
+    freeFn?.callAsFunction(handle);
     _freed = true;
   }
 
@@ -118,10 +118,42 @@ class OfflineTts {
     }
 
     final result = generateFn.callAsFunction(handle, text.toJS, genConfig) as JSObject;
-    final samples = (result.getProperty('samples'.toJS) as JSFloat32Array).toDart;
-    final sampleRate = (result.getProperty('sampleRate'.toJS) as JSNumber).toDartInt;
+    return _audioFromJs(result);
+  }
 
-    return GeneratedAudio(samples: samples, sampleRate: sampleRate);
+  GeneratedAudio generateFromPhonemes({
+    required PhonemeInput input,
+    OfflineTtsGenerationConfig? config,
+    int Function(Float32List samples, double progress)? onProgress,
+  }) {
+    final handle = ptr as JSObject;
+    final generateFn =
+        handle.getProperty('generateFromPhonemes'.toJS) as JSFunction?;
+    if (generateFn == null) {
+      throw StateError('generateFromPhonemes not found on OfflineTts instance');
+    }
+    final jsInput = JSObject();
+    jsInput['phonemes'] = input.phonemes.toJS;
+    jsInput['spans'] = input.spans.map((span) {
+      final value = JSObject();
+      value['phonemes'] = span.phonemes.toJS;
+      return value;
+    }).toList().toJS;
+    final generationConfig = config ?? OfflineTtsGenerationConfig();
+    final jsConfig = JSObject();
+    jsConfig['silenceScale'] = generationConfig.silenceScale.toJS;
+    jsConfig['speed'] = generationConfig.speed.toJS;
+    jsConfig['sid'] = generationConfig.sid.toJS;
+    jsConfig['numSteps'] = generationConfig.numSteps.toJS;
+    if (onProgress != null) {
+      jsConfig['callback'] =
+          (JSAny samples, JSAny n, JSAny progress, JSAny arg) {
+        return onProgress((samples as JSFloat32Array).toDart,
+            (progress as JSNumber).toDartDouble).toJS;
+      }.toJS;
+    }
+    final result = generateFn.callAsFunction(handle, jsInput, jsConfig) as JSObject;
+    return _audioFromJs(result);
   }
 
   int get sampleRate {
@@ -171,10 +203,7 @@ JSObject _configToJs(OfflineTtsConfig config) {
   kokoro['model'] = config.model.kokoro.model.toJS;
   kokoro['voices'] = config.model.kokoro.voices.toJS;
   kokoro['tokens'] = config.model.kokoro.tokens.toJS;
-  kokoro['dataDir'] = config.model.kokoro.dataDir.toJS;
   kokoro['lengthScale'] = config.model.kokoro.lengthScale.toJS;
-  kokoro['lexicon'] = config.model.kokoro.lexicon.toJS;
-  kokoro['lang'] = config.model.kokoro.lang.toJS;
   model['kokoro'] = kokoro;
 
   final kitten = JSObject();
@@ -231,4 +260,29 @@ JSObject _configToJs(OfflineTtsConfig config) {
   jsConfig['silenceScale'] = config.silenceScale.toJS;
 
   return jsConfig;
+}
+
+GeneratedAudio _audioFromJs(JSObject result) {
+  final samples = (result.getProperty('samples'.toJS) as JSFloat32Array).toDart;
+  final sampleRate = (result.getProperty('sampleRate'.toJS) as JSNumber).toDartInt;
+  final value = result.getProperty('spanAlignments'.toJS);
+  List<SpanAlignment>? alignments;
+  if (value != null) {
+    final array = value as JSArray;
+    final length = (array.getProperty('length'.toJS) as JSNumber).toDartInt;
+    alignments = [];
+    for (var i = 0; i < length; ++i) {
+      final row = array.getProperty(i.toJS) as JSObject;
+      alignments.add(SpanAlignment(
+        originalPhonemes:
+            (row.getProperty('originalPhonemes'.toJS) as JSString).toDart,
+        inferredPhonemes:
+            (row.getProperty('inferredPhonemes'.toJS) as JSString).toDart,
+        startTs: (row.getProperty('startTs'.toJS) as JSNumber).toDartDouble,
+        endTs: (row.getProperty('endTs'.toJS) as JSNumber).toDartDouble,
+      ));
+    }
+  }
+  return GeneratedAudio(samples: samples, sampleRate: sampleRate,
+      spanAlignments: alignments);
 }

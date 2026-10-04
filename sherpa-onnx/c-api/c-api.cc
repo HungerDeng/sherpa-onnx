@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -1518,13 +1519,8 @@ static sherpa_onnx::OfflineTtsConfig GetOfflineTtsConfig(
       SHERPA_ONNX_OR(config->model.kokoro.voices, "");
   tts_config.model.kokoro.tokens =
       SHERPA_ONNX_OR(config->model.kokoro.tokens, "");
-  tts_config.model.kokoro.data_dir =
-      SHERPA_ONNX_OR(config->model.kokoro.data_dir, "");
   tts_config.model.kokoro.length_scale =
       SHERPA_ONNX_OR(config->model.kokoro.length_scale, 1.0);
-  tts_config.model.kokoro.lexicon =
-      SHERPA_ONNX_OR(config->model.kokoro.lexicon, "");
-  tts_config.model.kokoro.lang = SHERPA_ONNX_OR(config->model.kokoro.lang, "");
 
   // kitten
   tts_config.model.kitten.model =
@@ -1632,7 +1628,13 @@ const SherpaOnnxOfflineTts *SherpaOnnxCreateOfflineTts(
 
   SherpaOnnxOfflineTts *tts = new SherpaOnnxOfflineTts;
 
-  tts->impl = std::make_unique<sherpa_onnx::OfflineTts>(tts_config);
+  try {
+    tts->impl = std::make_unique<sherpa_onnx::OfflineTts>(tts_config);
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("Failed to create TTS engine: %s", e.what());
+    delete tts;
+    return nullptr;
+  }
 
   return tts;
 }
@@ -1650,64 +1652,71 @@ int32_t SherpaOnnxOfflineTtsNumSpeakers(const SherpaOnnxOfflineTts *tts) {
   return tts->impl->NumSpeakers();
 }
 
-static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
-    const SherpaOnnxOfflineTts *tts, const char *text, int32_t sid, float speed,
-    std::function<int32_t(const float *, int32_t, float)> callback) {
-  sherpa_onnx::GenerationConfig config;
-  config.sid = sid;
-  config.speed = speed;
+static char *CopyTtsString(const std::string &value) {
+  char *copy = new char[value.size() + 1];
+  std::memcpy(copy, value.c_str(), value.size() + 1);
+  return copy;
+}
 
-  sherpa_onnx::GeneratedAudio audio =
-      tts->impl->Generate(text, config, callback);
-
-  if (audio.samples.empty()) {
+static const SherpaOnnxGeneratedAudio *CopyGeneratedAudio(
+    const sherpa_onnx::GeneratedAudio &audio) {
+  if (audio.samples.empty() && !audio.span_alignments) {
     return nullptr;
   }
 
-  SherpaOnnxGeneratedAudio *ans = new SherpaOnnxGeneratedAudio;
-
+  auto *ans = new SherpaOnnxGeneratedAudio{};
   float *samples = new float[audio.samples.size()];
   std::copy(audio.samples.begin(), audio.samples.end(), samples);
-
   ans->samples = samples;
-  ans->n = audio.samples.size();
+  ans->n = static_cast<int32_t>(audio.samples.size());
   ans->sample_rate = audio.sample_rate;
+
+  if (audio.span_alignments) {
+    ans->has_span_alignments = 1;
+    ans->num_span_alignments =
+        static_cast<int32_t>(audio.span_alignments->size());
+    auto *alignments =
+        new SherpaOnnxSpanAlignment[audio.span_alignments->size()]{};
+    for (size_t i = 0; i != audio.span_alignments->size(); ++i) {
+      const auto &source = (*audio.span_alignments)[i];
+      alignments[i].original_phonemes = CopyTtsString(source.original_phonemes);
+      alignments[i].inferred_phonemes = CopyTtsString(source.inferred_phonemes);
+      alignments[i].start_ts = source.start_ts;
+      alignments[i].end_ts = source.end_ts;
+    }
+    ans->span_alignments = alignments;
+  }
 
   return ans;
 }
 
-static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
-    const SherpaOnnxOfflineTts *tts, const char *text,
-    const SherpaOnnxGenerationConfig *config,
-    std::function<int32_t(const float *, int32_t, float)> callback) {
-  sherpa_onnx::GenerationConfig cfg;
+static bool GetGenerationConfig(const SherpaOnnxGenerationConfig *config,
+                                sherpa_onnx::GenerationConfig *cfg) {
   if (config->reference_audio) {
     if (config->reference_audio_len <= 0) {
       SHERPA_ONNX_LOGE("Invalid reference audio len: %d",
                        config->reference_audio_len);
-      return nullptr;
+      return false;
     }
 
-    cfg.reference_audio.assign(
+    cfg->reference_audio.assign(
         config->reference_audio,
         config->reference_audio + config->reference_audio_len);
   }
 
-  cfg.silence_scale = SHERPA_ONNX_OR(config->silence_scale, 0.2);
-  cfg.speed = SHERPA_ONNX_OR(config->speed, 1.0);
-  cfg.sid = config->sid;
-
-  cfg.reference_sample_rate = config->reference_sample_rate;
-
-  cfg.reference_text = SHERPA_ONNX_OR(config->reference_text, "");
-  cfg.num_steps = SHERPA_ONNX_OR(config->num_steps, 5);
+  cfg->silence_scale = SHERPA_ONNX_OR(config->silence_scale, 0.2);
+  cfg->speed = SHERPA_ONNX_OR(config->speed, 1.0);
+  cfg->sid = config->sid;
+  cfg->reference_sample_rate = config->reference_sample_rate;
+  cfg->reference_text = SHERPA_ONNX_OR(config->reference_text, "");
+  cfg->num_steps = SHERPA_ONNX_OR(config->num_steps, 5);
 
   if (config->extra && !std::string(config->extra).empty()) {
     try {
       auto json = nlohmann::json::parse(config->extra);
       for (auto &[k, v] : json.items()) {
         std::string val = v.is_string() ? v.get<std::string>() : v.dump();
-        cfg.extra.insert_or_assign(std::string(k), std::move(val));
+        cfg->extra.insert_or_assign(std::string(k), std::move(val));
       }
     } catch (const nlohmann::json::parse_error &e) {
       SHERPA_ONNX_LOGE("Failed to parse extra JSON: '%s'", e.what());
@@ -1715,22 +1724,37 @@ static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
     }
   }
 
-  sherpa_onnx::GeneratedAudio audio = tts->impl->Generate(text, cfg, callback);
+  return true;
+}
 
-  if (audio.samples.empty()) {
+static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
+    const SherpaOnnxOfflineTts *tts, const char *text, int32_t sid, float speed,
+    std::function<int32_t(const float *, int32_t, float)> callback) {
+  sherpa_onnx::GenerationConfig config;
+  config.sid = sid;
+  config.speed = speed;
+
+  try {
+    return CopyGeneratedAudio(tts->impl->Generate(text, config, callback));
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("TTS generation failed: %s", e.what());
     return nullptr;
   }
+}
 
-  SherpaOnnxGeneratedAudio *ans = new SherpaOnnxGeneratedAudio;
+static const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateInternal(
+    const SherpaOnnxOfflineTts *tts, const char *text,
+    const SherpaOnnxGenerationConfig *config,
+    std::function<int32_t(const float *, int32_t, float)> callback) {
+  sherpa_onnx::GenerationConfig cfg;
+  if (!GetGenerationConfig(config, &cfg)) return nullptr;
 
-  float *samples = new float[audio.samples.size()];
-  std::copy(audio.samples.begin(), audio.samples.end(), samples);
-
-  ans->samples = samples;
-  ans->n = audio.samples.size();
-  ans->sample_rate = audio.sample_rate;
-
-  return ans;
+  try {
+    return CopyGeneratedAudio(tts->impl->Generate(text, cfg, callback));
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("TTS generation failed: %s", e.what());
+    return nullptr;
+  }
 }
 
 const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerate(
@@ -1892,21 +1916,13 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithZipvoice(
   config.reference_text = ptext_s;
   config.num_steps = num_steps;
 
-  auto out = tts->impl->Generate(text_s, config, /*callback=*/nullptr);
-
-  if (out.samples.empty()) {
+  try {
+    return CopyGeneratedAudio(
+        tts->impl->Generate(text_s, config, /*callback=*/nullptr));
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("TTS generation failed: %s", e.what());
     return nullptr;
   }
-
-  auto *ans = new SherpaOnnxGeneratedAudio;
-  ans->sample_rate = static_cast<int32_t>(out.sample_rate);
-  ans->n = static_cast<int32_t>(out.samples.size());
-
-  float *buf = new float[out.samples.size()];
-  std::copy(out.samples.begin(), out.samples.end(), buf);
-  ans->samples = buf;
-
-  return ans;
 }
 
 const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithConfig(
@@ -1941,10 +1957,64 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithConfig(
   }
 }
 
+const SherpaOnnxGeneratedAudio *
+SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+    const SherpaOnnxOfflineTts *tts, const SherpaOnnxPhonemeInput *input,
+    const SherpaOnnxGenerationConfig *config,
+    SherpaOnnxGeneratedAudioProgressCallbackWithArg callback, void *arg) {
+  if (!tts || !input || !input->phonemes || !config || input->num_spans < 0 ||
+      (input->num_spans > 0 && !input->spans)) {
+    SHERPA_ONNX_LOGE("Invalid phoneme TTS input or config");
+    return nullptr;
+  }
+
+  sherpa_onnx::PhonemeInput phoneme_input;
+  phoneme_input.phonemes = input->phonemes;
+  phoneme_input.spans.reserve(input->num_spans);
+  for (int32_t i = 0; i < input->num_spans; ++i) {
+    if (!input->spans[i].phonemes) {
+      SHERPA_ONNX_LOGE("phonemes of span %d is nullptr", i);
+      return nullptr;
+    }
+    phoneme_input.spans.emplace_back(input->spans[i].phonemes);
+  }
+
+  sherpa_onnx::GenerationConfig cfg;
+  if (!GetGenerationConfig(config, &cfg)) return nullptr;
+
+  std::function<int32_t(const float *, int32_t, float)> wrapped_callback;
+  if (callback) {
+    wrapped_callback = [callback, arg](const float *samples, int32_t n,
+                                       float progress) {
+      return callback(samples, n, progress, arg);
+    };
+  }
+
+  try {
+    auto audio = tts->impl->GenerateFromPhonemes(
+        phoneme_input, cfg, std::move(wrapped_callback));
+    if (!audio.span_alignments ||
+        audio.span_alignments->size() !=
+            static_cast<size_t>(input->num_spans)) {
+      SHERPA_ONNX_LOGE("Kokoro returned an invalid number of span alignments");
+      return nullptr;
+    }
+    return CopyGeneratedAudio(audio);
+  } catch (const std::exception &e) {
+    SHERPA_ONNX_LOGE("Kokoro generation failed: %s", e.what());
+    return nullptr;
+  }
+}
+
 void SherpaOnnxDestroyOfflineTtsGeneratedAudio(
     const SherpaOnnxGeneratedAudio *p) {
   if (p) {
     delete[] p->samples;
+    for (int32_t i = 0; i < p->num_span_alignments; ++i) {
+      delete[] p->span_alignments[i].original_phonemes;
+      delete[] p->span_alignments[i].inferred_phonemes;
+    }
+    delete[] p->span_alignments;
     delete p;
   }
 }
@@ -2016,6 +2086,15 @@ const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithZipvoice(
 
 const SherpaOnnxGeneratedAudio *SherpaOnnxOfflineTtsGenerateWithConfig(
     const SherpaOnnxOfflineTts *tts, const char *text,
+    const SherpaOnnxGenerationConfig *config,
+    SherpaOnnxGeneratedAudioProgressCallbackWithArg callback, void *arg) {
+  SHERPA_ONNX_LOGE("TTS is not enabled. Please rebuild sherpa-onnx");
+  return nullptr;
+}
+
+const SherpaOnnxGeneratedAudio *
+SherpaOnnxOfflineTtsGenerateFromPhonemesWithConfig(
+    const SherpaOnnxOfflineTts *tts, const SherpaOnnxPhonemeInput *input,
     const SherpaOnnxGenerationConfig *config,
     SherpaOnnxGeneratedAudioProgressCallbackWithArg callback, void *arg) {
   SHERPA_ONNX_LOGE("TTS is not enabled. Please rebuild sherpa-onnx");

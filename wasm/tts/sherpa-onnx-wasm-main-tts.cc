@@ -15,7 +15,7 @@ extern "C" {
 
 static_assert(sizeof(SherpaOnnxOfflineTtsVitsModelConfig) == 8 * 4, "");
 static_assert(sizeof(SherpaOnnxOfflineTtsMatchaModelConfig) == 8 * 4, "");
-static_assert(sizeof(SherpaOnnxOfflineTtsKokoroModelConfig) == 8 * 4, "");
+static_assert(sizeof(SherpaOnnxOfflineTtsKokoroModelConfig) == 4 * 4, "");
 static_assert(sizeof(SherpaOnnxOfflineTtsKittenModelConfig) == 5 * 4, "");
 static_assert(sizeof(SherpaOnnxOfflineTtsZipvoiceModelConfig) == 10 * 4, "");
 static_assert(sizeof(SherpaOnnxOfflineTtsPocketModelConfig) == 8 * 4, "");
@@ -35,6 +35,10 @@ static_assert(sizeof(SherpaOnnxOfflineTtsConfig) ==
               "");
 
 static_assert(sizeof(SherpaOnnxGenerationConfig) == 9 * 4, "");
+static_assert(sizeof(SherpaOnnxPhonemeSpan) == 1 * 4, "");
+static_assert(sizeof(SherpaOnnxPhonemeInput) == 3 * 4, "");
+static_assert(sizeof(SherpaOnnxSpanAlignment) == 4 * 4, "");
+static_assert(sizeof(SherpaOnnxGeneratedAudio) == 6 * 4, "");
 
 void MyPrint(SherpaOnnxOfflineTtsConfig *tts_config) {
   auto tts_model_config = &tts_config->model;
@@ -68,11 +72,7 @@ void MyPrint(SherpaOnnxOfflineTtsConfig *tts_config) {
   fprintf(stdout, "model: %s\n", kokoro->model);
   fprintf(stdout, "voices: %s\n", kokoro->voices);
   fprintf(stdout, "tokens: %s\n", kokoro->tokens);
-  fprintf(stdout, "data_dir: %s\n", kokoro->data_dir);
   fprintf(stdout, "length scale: %.3f\n", kokoro->length_scale);
-  fprintf(stdout, "dict_dir: %s\n", kokoro->dict_dir);
-  fprintf(stdout, "lexicon: %s\n", kokoro->lexicon);
-  fprintf(stdout, "lang: %s\n", kokoro->lang);
 
   fprintf(stdout, "----------kitten model config----------\n");
   fprintf(stdout, "model: %s\n", kitten->model);

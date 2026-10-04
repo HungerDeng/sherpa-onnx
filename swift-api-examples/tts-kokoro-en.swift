@@ -5,15 +5,13 @@ class MyClass {
 }
 
 func run() {
-  let model = "./kokoro-en-v0_19/model.onnx"
-  let voices = "./kokoro-en-v0_19/voices.bin"
-  let tokens = "./kokoro-en-v0_19/tokens.txt"
-  let dataDir = "./kokoro-en-v0_19/espeak-ng-data"
+  let model = "./kokoro-multi-lang-v1_0/model.onnx"
+  let voices = "./kokoro-multi-lang-v1_0/voices.bin"
+  let tokens = "./kokoro-multi-lang-v1_0/tokens.txt"
   let kokoro = sherpaOnnxOfflineTtsKokoroModelConfig(
     model: model,
     voices: voices,
-    tokens: tokens,
-    dataDir: dataDir
+    tokens: tokens
   )
   let modelConfig = sherpaOnnxOfflineTtsModelConfig(kokoro: kokoro, debug: 0)
   var ttsConfig = sherpaOnnxOfflineTtsConfig(model: modelConfig)
@@ -41,15 +39,20 @@ func run() {
 
   let tts = SherpaOnnxOfflineTtsWrapper(config: &ttsConfig)
 
-  let text =
-    "Friends fell out often because life was changing so fast. The easiest thing in the world was to lose touch with someone."
+  let phonemes = "ðə pɹˈaɪs ɪz wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz. ɐ bˈɪt ɛkspˈɛnsɪv."
+  let spans = ["ðə", "pɹˈaɪs", "ɪz", "wˈʌn θˈaʊzənd tˈuː hˈʌndɹɪd dˈɑːlɚz", ".", "ɐ", "bˈɪt", "ɛkspˈɛnsɪv", "."]
   var genConfig = SherpaOnnxGenerationConfigSwift()
   genConfig.sid = 0
   genConfig.speed = 1.0
   genConfig.silenceScale = 0.2
 
-  let audio = tts.generateWithConfig(
-    text: text, config: genConfig, callback: callback, arg: arg)
+  let audio = tts.generateFromPhonemes(
+    phonemes: phonemes, spans: spans, config: genConfig, callback: callback, arg: arg)
+  if let alignments = audio.spanAlignments {
+    for row in alignments {
+      print("\(row.originalPhonemes) -> \(row.inferredPhonemes): \(row.startTs) to \(row.endTs) s")
+    }
+  }
   let filename = "test-kokoro-en.wav"
   let ok = audio.save(filename: filename)
   if ok == 1 {

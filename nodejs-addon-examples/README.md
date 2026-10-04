@@ -178,10 +178,10 @@ The following tables list the examples in this folder.
 |[./test_tts_non_streaming_zipvoice_zh_en_play_async.js](./test_tts_non_streaming_zipvoice_zh_en_play_async.js)| Zero-shot text-to-speech with a ZipVoice Chinese/English Model using async JS API and live audio playback|
 |[./test_tts_non_streaming_kitten_en.js](./test_tts_non_streaming_kitten_en.js)| Text-to-speech with a KittenTTS English Model (async API)|
 |[./test_tts_non_streaming_kitten_en_sync.js](./test_tts_non_streaming_kitten_en_sync.js)| Text-to-speech with a KittenTTS English Model (sync API)|
-|[./test_tts_non_streaming_kokoro_en.js](./test_tts_non_streaming_kokoro_en.js)| Text-to-speech with a Kokoro English Model (sync API)|
-|[./test_tts_non_streaming_kokoro_en_async.js](./test_tts_non_streaming_kokoro_en_async.js)| Text-to-speech with a Kokoro English Model (async API)|
-|[./test_tts_non_streaming_kokoro_zh_en.js](./test_tts_non_streaming_kokoro_zh_en.js)| Text-to-speech with a Kokoro Model supporting Chinese and English (sync API)|
-|[./test_tts_non_streaming_kokoro_zh_en_async.js](./test_tts_non_streaming_kokoro_zh_en_async.js)| Text-to-speech with a Kokoro Model supporting Chinese and English (async API)|
+|[./test_tts_non_streaming_kokoro_en.js](./test_tts_non_streaming_kokoro_en.js)| Kokoro v1.0 from misaki-rs phonemes|
+|[./test_tts_non_streaming_kokoro_en_async.js](./test_tts_non_streaming_kokoro_en_async.js)| Kokoro v1.0 with async model creation|
+|[./test_tts_non_streaming_kokoro_zh_en.js](./test_tts_non_streaming_kokoro_zh_en.js)| Kokoro v1.1-zh from misaki-rs phonemes|
+|[./test_tts_non_streaming_kokoro_zh_en_async.js](./test_tts_non_streaming_kokoro_zh_en_async.js)| Kokoro v1.1-zh with async model creation|
 |[./test_tts_non_streaming_matcha_icefall_en.js](./test_tts_non_streaming_matcha_icefall_en.js)| Text-to-speech with a [MatchaTTS English Model](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/matcha.html#matcha-icefall-en-us-ljspeech-american-english-1-female-speaker) (sync API)|
 |[./test_tts_non_streaming_matcha_icefall_en_async.js](./test_tts_non_streaming_matcha_icefall_en_async.js)| Text-to-speech with a [MatchaTTS English Model](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/matcha.html#matcha-icefall-en-us-ljspeech-american-english-1-female-speaker) (async API)|
 |[./test_tts_non_streaming_matcha_icefall_zh.js](./test_tts_non_streaming_matcha_icefall_zh.js)| Text-to-speech with a [MatchaTTS Chinese Model](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/matcha.html#matcha-icefall-zh-baker-chinese-1-female-speaker) (sync API)|
@@ -762,42 +762,37 @@ node ./test_tts_non_streaming_supertonic_en_play_async.js
 ### Text-to-speech with Kokoro TTS models (Chinese + English TTS, sync API)
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
-tar xf kokoro-multi-lang-v1_0.tar.bz2
-rm kokoro-multi-lang-v1_0.tar.bz2
-
+cd ../scripts/kokoro/v1.1-zh && ./run.sh && cd ../../../nodejs-addon-examples
 node ./test_tts_non_streaming_kokoro_zh_en.js
 ```
 
-### Text-to-speech with Kokoro TTS models (Chinese + English TTS, async API)
+### Text-to-speech with Kokoro TTS models (Chinese + English TTS, async model creation)
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2
-tar xf kokoro-multi-lang-v1_0.tar.bz2
-rm kokoro-multi-lang-v1_0.tar.bz2
-
 node ./test_tts_non_streaming_kokoro_zh_en_async.js
 ```
 
 ### Text-to-speech with Kokoro TTS models (English TTS, sync API)
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-tar xf kokoro-en-v0_19.tar.bz2
-rm kokoro-en-v0_19.tar.bz2
-
+cd ../scripts/kokoro/v1.0 && ./run.sh && cd ../../../nodejs-addon-examples
 node ./test_tts_non_streaming_kokoro_en.js
 ```
 
-### Text-to-speech with Kokoro TTS models (English TTS, async API)
+### Text-to-speech with Kokoro TTS models (English TTS, async model creation)
 
 ```bash
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2
-tar xf kokoro-en-v0_19.tar.bz2
-rm kokoro-en-v0_19.tar.bz2
-
 node ./test_tts_non_streaming_kokoro_en_async.js
 ```
+
+All four Kokoro examples use one of the supplied misaki-rs phoneme outputs by
+default. Pass a `G2pOutput` JSON file as the first argument to use your own
+output. The examples pass only `phonemes` and `spans[].phonemes` to Kokoro,
+then print the waveform sample rate, sample count, and per-span alignments.
+The files from `scripts/kokoro/v1.0` or `v1.1-zh` must be exported with
+`pred_dur`; the older released ONNX files cannot supply timestamps. The
+`*_async.js` examples create the model asynchronously and then use the current
+synchronous phoneme generation method. Use a rebuilt Node addon with this API.
 
 ### Text-to-speech with MatchaTTS models (English TTS, sync API)
 ```bash

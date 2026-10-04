@@ -96,11 +96,7 @@ void PrintOfflineTtsConfig(SherpaOnnxOfflineTtsConfig *tts_config) {
   fprintf(stdout, "model: %s\n", kokoro->model);
   fprintf(stdout, "voices: %s\n", kokoro->voices);
   fprintf(stdout, "tokens: %s\n", kokoro->tokens);
-  fprintf(stdout, "data_dir: %s\n", kokoro->data_dir);
   fprintf(stdout, "length scale: %.3f\n", kokoro->length_scale);
-  fprintf(stdout, "dict_dir: %s\n", kokoro->dict_dir);
-  fprintf(stdout, "lexicon: %s\n", kokoro->lexicon);
-  fprintf(stdout, "lang: %s\n", kokoro->lang);
 
   fprintf(stdout, "----------kitten model config----------\n");
   fprintf(stdout, "model: %s\n", kitten->model);
